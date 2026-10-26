@@ -22,3 +22,7 @@ Para lograr esta réplica exacta, el desarrollo se está realizando mediante **i
 ---
 
 ⭐ *¡Guarda este repositorio en favoritos o dale una estrella para enterarte al instante cuando suba la versión Beta!*
+
+
+
+<img width="3440" height="1440" alt="image" src="https://github.com/user-attachments/assets/7ffbca1f-3af6-4b31-8f7d-28267369978c" />
