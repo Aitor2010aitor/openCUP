@@ -1,0 +1,24 @@
+{
+  "name": "cacup",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Editor de video local inspirado en el flujo de trabajo de CapCut",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "test": "node tools/functional-test.mjs",
+    "test:layout": "node tools/layout-test.mjs",
+    "test:features": "node tools/features-test.mjs",
+    "test:integrations": "node tools/new-features-test.mjs",
+    "test:voice": "node tools/voice-test.mjs",
+    "test:export": "node tools/export-test.mjs",
+    "test:audio": "node tools/audio-export-test.mjs",
+    "test:visual": "node tools/visual-test.mjs",
+    "test:preview": "node tools/preview-drag-test.mjs",
+    "test:effects": "node tools/effects-visual-test.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.16.0"
+  }
+}

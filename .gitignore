@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+shots/
+docs/reference/*.png
+.cacup-ai-token
+shots/downloads/
+shots/export-test/
+shots/audio-export-test/
+shots/tmp/
+*.log
+Thumbs.db
+.DS_Store

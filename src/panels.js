@@ -1,0 +1,2407 @@
+import {
+  state,
+  on,
+  setPanel,
+  selectedClip,
+  addTextClip,
+  addStickerClip,
+  addMediaToTimeline,
+  updateClip,
+  duplicateSelected,
+  deleteSelected,
+  selectClip,
+  updateProject,
+  newProject,
+  saveNow,
+  importFiles,
+  openProject,
+  goHome,
+  projectDuration,
+  seek,
+  FILTERS,
+  CAPCUT_FILTER_CATEGORIES,
+  TEXT_DEFAULTS,
+} from './store.js';
+import { icon } from './icons.js';
+import { openModal, confirmDialog, promptDialog } from './modal.js';
+import { openExportDialog } from './export.js';
+import { openShortcutsDialog } from './dialogs.js';
+import { TEMPLATES } from './templates.js';
+import {
+  STICKERS,
+  STICKER_CATEGORIES,
+  EFFECTS,
+  EFFECT_CATEGORIES,
+  TRANSITIONS,
+  TRANSITION_FADES,
+  CAPTION_STYLES,
+  AVATAR_PRESETS,
+  ADJUST_PRESETS,
+  ADJUST_CATEGORIES,
+} from './library.js';
+import { adjustCss } from './renderer.js';
+import {
+  TEXT_STYLES,
+  TEXT_BUBBLES,
+  TEXT_EFFECTS,
+  TEXT_ANIMATION_GROUPS,
+  TEXT_ANIMATIONS,
+  TEXT_FONTS,
+  TEXT_CASES,
+  TEXT_ALIGNS,
+  TEXT_WEIGHTS,
+} from './text-catalog.js';
+import { openCapCutImportDialog } from './capcut.js';
+import { fixWebmDuration } from './webm.js';
+import { escapeHtml, formatTime, formatBytes, toast, clamp } from './utils.js';
+
+const PANEL_TITLES = {
+  media: 'Archivos multimedia',
+  audio: 'Audio',
+  text: 'Texto',
+  stickers: 'Stickers',
+  effects: 'Efectos',
+  transitions: 'Transiciones',
+  captions: 'Subtítulos',
+  filters: 'Filtros',
+  adjust: 'Ajuste',
+  templates: 'Plantillas',
+  avatar: 'Avatar de IA',
+};
+
+const PANEL_HELP = {
+  media: 'Importa videos, imágenes y audio desde tu equipo. También puedes arrastrarlos directamente al panel o a la línea de tiempo. Los archivos se guardan en el almacenamiento local del navegador.',
+  audio: 'Añade música y efectos de sonido, o graba tu voz con el micrófono. El volumen y los fundidos se ajustan desde el panel Detalles.',
+  text: 'Añade títulos y subtítulos. Haz clic en un estilo para insertarlo en el cursor y edítalo desde el panel Detalles.',
+  stickers: 'Stickers organizados por categorías. Se insertan como capas independientes que puedes escalar, mover, rotar y animar con fundidos.',
+  effects: 'Efectos visuales en tiempo real: desenfoque, luz, grano, viñeta, espejo, vibración y más. Puedes combinarlos con filtros y ajustes.',
+  transitions: 'Transiciones de entrada para el clip seleccionado. Se aplican al inicio y se mezclan con el clip anterior de la misma pista.',
+  captions: 'Añade subtítulos manuales con estilos, o importa un archivo SRT. La transcripción automática no está disponible sin conexión.',
+  filters: 'Los filtros cambian el color del clip seleccionado. Se agrupan por familias y se incluyen al exportar.',
+  adjust: 'Ajusta brillo, contraste, saturación, opacidad, escala y rotación del clip seleccionado.',
+  templates: 'Crea un proyecto nuevo con una composición inicial de texto y relación de aspecto. Después añade tus propios medios.',
+  avatar: 'Añade un avatar local como capa con fondo de color o sube una foto. La generación de avatares animados con IA requiere conexión.',
+};
+
+const arrayBufferToFile = (blob, name) => new File([blob], name, { type: blob.type || 'audio/webm' });
+
+function mediaCard(media) {
+  const badge = media.kind === 'video' ? 'VIDEO' : media.kind === 'audio' ? 'AUDIO' : 'IMAGEN';
+  const thumb = media.thumb
+    ? `<img src="${media.thumb}" alt="" draggable="false" />`
+    : `<span class="thumb-empty">${icon(media.kind === 'audio' ? 'music' : 'image', 26)}</span>`;
+  const duration = media.kind === 'image' ? 'Imagen' : formatTime(media.duration || 0);
+  return `
+    <button class="media-card" draggable="true" data-media-id="${media.id}" data-name="${escapeHtml((media.name || '').toLowerCase())}" title="${escapeHtml(media.name || '')}">
+      ${thumb}
+      <span class="media-badge">${badge}</span>
+      <span class="media-add">${icon('plus', 12)}</span>
+      <span class="media-name">${escapeHtml(media.name || 'Archivo')}</span>
+      <span class="media-duration">${duration}</span>
+    </button>`;
+}
+
+function panelEmpty(title, text, iconName = 'layers') {
+  return `<div class="panel-empty">${icon(iconName, 28)}<strong>${escapeHtml(title)}</strong>${escapeHtml(text)}</div>`;
+}
+
+let filterSearch = '';
+let effectSearch = '';
+let stickerSearch = '';
+const CUSTOM_ADJUST_KEY = 'cacup.adjust.presets';
+
+function loadCustomAdjusts() {
+  try {
+    const raw = localStorage.getItem(CUSTOM_ADJUST_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.filter((item) => item && item.id && item.adjust) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomAdjusts(list) {
+  try {
+    localStorage.setItem(CUSTOM_ADJUST_KEY, JSON.stringify(list));
+  } catch {
+    /* sin almacenamiento: el preset vive solo en esta sesión */
+  }
+}
+
+let customAdjusts = loadCustomAdjusts();
+
+function defaultAdjustValue(key) {
+  return key === 'brightness' || key === 'contrast' || key === 'saturate' ? 100 : 0;
+}
+
+function allAdjustPresets() {
+  const saved = customAdjusts.map((item) => ({ id: item.id, label: item.label, category: 'Tuyos', adjust: item.adjust, custom: true }));
+  return [...saved, ...ADJUST_PRESETS];
+}
+
+function filterGallery(activeFilter, includeNone, category = 'Destacado') {
+  const categories = ['Todos', ...CAPCUT_FILTER_CATEGORIES];
+  const query = filterSearch.trim().toLowerCase();
+  const entries = Object.entries(FILTERS).filter(([key, value]) => {
+    if (!includeNone && key === 'none') return false;
+    if (query) return value.label.toLowerCase().includes(query);
+    return category === 'Todos' || value.category === category;
+  });
+  return `
+    <div class="cat-rail category-chips">
+      ${categories.map((name) => `<button class="category-chip${category === name ? ' active' : ''}" data-filter-category="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join('')}
+    </div>
+    <div class="cat-main">
+      <label class="search-box filter-search">${icon('search', 13)}<input data-filter-search placeholder="Buscar filtro" value="${escapeHtml(filterSearch)}" /><span class="filter-count">${entries.length}</span></label>
+      <div class="filter-grid">
+        ${entries.map(([key, value]) => `
+          <button class="filter-card${activeFilter === key ? ' active' : ''}" data-filter="${key}" data-filter-label="${escapeHtml(value.label.toLowerCase())}">
+            <div class="filter-preview" style="filter:${value.css}"></div>
+            <div class="filter-name"><span>${value.label}</span>${activeFilter === key ? icon('check', 11) : ''}</div>
+          </button>`).join('')}
+      </div>
+      <div class="panel-empty" style="padding-top:2px">
+        ${activeFilter ? 'Filtro aplicado al clip seleccionado.' : 'Selecciona un clip de video o imagen para aplicarle un filtro.'}
+      </div>
+    </div>`;
+}
+
+function adjustReadout(key, value) {
+  if (key === 'adjust.brightness' || key === 'adjust.contrast' || key === 'adjust.saturate') {
+    return `${Math.round(value)}%`;
+  }
+  if (key === 'opacity' || key === 'volume' || key === 'scale') return `${Math.round(value * 100)}%`;
+  if (key === 'rotate') return `${Math.round(value)}°`;
+  if (key === 'speed') return `${value.toFixed(2)}×`;
+  return String(Math.round(value * 100) / 100);
+}
+
+function adjustRow(label, key, inputValue, min, max, step, factor) {
+  const stored = Number(inputValue) * factor;
+  return `
+    <div class="adj-row">
+      <div class="adj-head"><span>${label}</span><b data-adj-readout="${key}">${adjustReadout(key, stored)}</b></div>
+      <input type="range" data-adjust-key="${key}" data-factor="${factor}" min="${min}" max="${max}" step="${step}" value="${inputValue}" />
+    </div>`;
+}
+
+async function recordVoice() {
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    toast('Tu navegador no permite grabar audio', 'error');
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (error) {
+    console.error(error);
+    toast('No se pudo acceder al micrófono', 'error');
+    return;
+  }
+  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
+  const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  const chunks = [];
+  let closed = false;
+  let keep = false;
+  let recordStartedAt = 0;
+  const startedAt = performance.now();
+  recorder.addEventListener('dataavailable', (event) => {
+    if (event.data?.size) chunks.push(event.data);
+  });
+
+  const modal = openModal({
+    title: 'Grabar voz',
+    width: 420,
+    dismissible: false,
+    body: `
+      <div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:14px 0 6px">
+        <div class="rec-dot"></div>
+        <div style="font-size:28px;font-weight:800;font-variant-numeric:tabular-nums" data-rec-time>00:00</div>
+        <div class="muted" style="font-size:11px;text-align:center">Habla cerca del micrófono.<br/>La grabación se añadirá a tus medios y a la línea de tiempo.</div>
+      </div>`,
+    footer: `<button class="btn" data-rec-cancel>Cancelar</button><button class="btn btn-primary" data-rec-stop>Detener y usar</button>`,
+    onMount(api) {
+      const timeEl = api.body.querySelector('[data-rec-time]');
+      const timer = setInterval(() => {
+        timeEl.textContent = formatTime((performance.now() - startedAt) / 1000);
+      }, 250);
+      const stopRecording = (use) => {
+        if (closed) return;
+        closed = true;
+        keep = use;
+        clearInterval(timer);
+        if (recorder.state !== 'inactive') recorder.stop();
+        for (const track of stream.getTracks()) track.stop();
+        api.close();
+      };
+      api.root.querySelector('[data-modal-close]')?.addEventListener('click', () => stopRecording(false));
+      api.foot.querySelector('[data-rec-cancel]').addEventListener('click', () => stopRecording(false));
+      api.foot.querySelector('[data-rec-stop]').addEventListener('click', () => stopRecording(true));
+    },
+  });
+
+  recorder.addEventListener('stop', async () => {
+    const modalHost = document.getElementById('modal-root');
+    if (modalHost && !keep) return;
+    if (!keep || !chunks.length) return;
+    const raw = new Blob(chunks, { type: mime || 'audio/webm' });
+    const seconds = Math.max(0.2, (performance.now() - recordStartedAt) / 1000);
+    const blob = await fixWebmDuration(raw, seconds);
+    const filename = `Grabación de voz ${new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}.webm`;
+    setPanel('media');
+    await importFiles([arrayBufferToFile(blob, filename)]);
+    toast('Grabación añadida a tus medios', 'success');
+  });
+
+  recordStartedAt = performance.now();
+  recorder.start(250);
+}
+
+function parseSrt(text) {
+  const blocks = text.replace(/\r/g, '').trim().split(/\n{2,}/);
+  const cues = [];
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    const index = lines.findIndex((line) => line.includes('-->'));
+    if (index < 0) continue;
+    const match = lines[index].match(/(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)/);
+    if (!match) continue;
+    const start = Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(match[4]) / 1000;
+    const end = Number(match[5]) * 3600 + Number(match[6]) * 60 + Number(match[7]) + Number(match[8]) / 1000;
+    const content = lines.slice(index + 1).join('\n').trim();
+    if (content && end > start) cues.push({ start, end, content });
+  }
+  return cues;
+}
+
+export function mountLeftPanel(host) {
+  host.classList.add('panel', 'left-panel');
+  host.innerHTML = `
+    <aside class="left-rail">
+      <button class="rail-import" data-import>Importar ${icon('chevronUp', 12)}</button>
+      <div class="rail-nav">
+        <button class="rail-item" data-rail="media">Archivos multimedia</button>
+        <button class="rail-item" data-rail="timeline">Línea de tiempo</button>
+        <button class="rail-item" data-rail="secondary">Proyectos secundarios</button>
+      </div>
+      <div class="rail-groups">
+        <button class="rail-drop" data-rail-group="yours">Tuyos ${icon('chevronDown', 10)}</button>
+        <div class="rail-sub hidden" data-rail-sub="yours">
+          <button data-rail-filter="all">Todos los medios</button>
+          <button data-rail-filter="video">Videos</button>
+          <button data-rail-filter="image">Imágenes</button>
+          <button data-rail-filter="audio">Audio</button>
+        </div>
+        <button class="rail-drop rail-generate" data-rail-group="generate"><span>Generar</span><span class="rail-ai-tag">AI</span><span class="rail-ai-dot"></span>${icon('chevronDown', 10)}</button>
+        <div class="rail-sub hidden" data-rail-sub="generate">
+          <button data-ai-tool="image">Imagen de IA</button>
+          <button data-ai-tool="video">Video de IA</button>
+          <button data-ai-tool="audio">Audio de IA</button>
+        </div>
+        <button class="rail-drop" data-rail-group="spaces">Espacios ${icon('chevronDown', 10)}</button>
+        <div class="rail-sub hidden" data-rail-sub="spaces">
+          <button data-space-create>Crear espacio</button>
+          <button data-space-info>¿Qué son los espacios?</button>
+        </div>
+        <button class="rail-drop" data-rail-group="library">Biblioteca ${icon('chevronDown', 10)}</button>
+        <div class="rail-sub hidden" data-rail-sub="library">
+          <button data-library-media>Medios guardados</button>
+          <button data-library-templates>Plantillas</button>
+        </div>
+      </div>
+    </aside>
+    <div class="left-main">
+      <div class="content-head" data-head></div>
+      <div class="panel-body" data-body></div>
+      <div class="panel-foot" data-foot></div>
+    </div>`;
+  const head = host.querySelector('[data-head]');
+  const body = host.querySelector('[data-body]');
+  const foot = host.querySelector('[data-foot]');
+  const rail = host.querySelector('.left-rail');
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.className = 'hidden';
+  host.append(fileInput);
+
+  const subscriptions = [];
+  let suppressRender = false;
+  let searchQuery = '';
+  let fileMode = 'media';
+  let railView = 'media';
+  let mediaFilter = 'all';
+  let openGroup = null;
+  let stickerCategory = STICKER_CATEGORIES[0].name;
+  let effectCategory = 'Todos';
+  let filterCategory = 'Destacado';
+  let transitionCategory = 'Todas';
+  let adjustCategory = 'Todos';
+  let adjustSearch = '';
+  let filterSearchTimer = null;
+  let captionStyle = 'clean';
+  let textTab = 'text';
+  let textSubTab = 'basic';
+  let ttsVoices = [];
+  let ttsVoice = '';
+  let ttsRate = 1;
+  let ttsPitch = 1;
+  const speech = typeof window !== 'undefined' && 'speechSynthesis' in window ? window.speechSynthesis : null;
+  const onVoicesChanged = () => {
+    try {
+      ttsVoices = speech?.getVoices() || [];
+    } catch {
+      ttsVoices = [];
+    }
+    if (host.isConnected && state.panel === 'text' && textTab === 'tts') render();
+  };
+  if (speech) {
+    try {
+      ttsVoices = speech.getVoices();
+    } catch {
+      ttsVoices = [];
+    }
+    speech.addEventListener?.('voiceschanged', onVoicesChanged);
+  }
+
+  function pickFiles(mode, accept, multiple) {
+    fileMode = mode;
+    fileInput.accept = accept;
+    fileInput.multiple = multiple;
+    fileInput.value = '';
+    fileInput.click();
+  }
+
+  function applyFilter(filter) {
+    const found = selectedClip();
+    if (!found || !['video', 'image'].includes(found.clip.kind)) {
+      toast('Selecciona un clip de video o imagen', 'warning');
+      return;
+    }
+    updateClip(found.clip.id, { filter });
+    toast(`Filtro “${FILTERS[filter]?.label || filter}” aplicado`, 'success', 1800);
+  }
+
+  function applyAdjustPreset(id) {
+    const found = selectedClip();
+    if (!found || !['video', 'image'].includes(found.clip.kind)) {
+      toast('Selecciona un clip de video o imagen', 'warning');
+      return;
+    }
+    const preset = allAdjustPresets().find((item) => item.id === id);
+    if (!preset) return;
+    if (!preset.adjust) {
+      toast('Mueve los deslizadores de Detalles para crear tu ajuste', 'info');
+      return;
+    }
+    updateClip(found.clip.id, { adjust: { ...preset.adjust } });
+    toast(`Ajuste “${preset.label}” aplicado`, 'success', 1800);
+  }
+
+  async function saveCurrentAdjust() {
+    const found = selectedClip();
+    if (!found || !['video', 'image'].includes(found.clip.kind)) {
+      toast('Selecciona un clip de video o imagen', 'warning');
+      return;
+    }
+    const adjust = { ...(found.clip.adjust || {}) };
+    if (!Object.keys(adjust).length) {
+      toast('Mueve los deslizadores de Detalles antes de guardar', 'warning');
+      return;
+    }
+    const name = await promptDialog({
+      title: 'Agregar ajuste',
+      label: 'Nombre del ajuste',
+      value: `Ajuste ${customAdjusts.length + 1}`,
+      confirmLabel: 'Guardar',
+    });
+    if (!name) return;
+    const item = { id: `custom_${Date.now().toString(36)}`, label: name, adjust };
+    customAdjusts = [item, ...customAdjusts.filter((entry) => entry.id !== item.id)].slice(0, 24);
+    saveCustomAdjusts(customAdjusts);
+    adjustCategory = 'Tuyos';
+    adjustSearch = '';
+    render();
+    toast(`Ajuste “${name}” guardado en Tuyos`, 'success', 1800);
+  }
+
+  function applyTransition(kind) {
+    const found = selectedClip();
+    if (!found) {
+      toast('Selecciona un clip para aplicar la transición', 'warning');
+      return;
+    }
+    if (kind === 'open') {
+      updateClip(found.clip.id, { transition: 'none', transitionDuration: 0.6, fadeIn: 0.9, fadeOut: 0 });
+      toast('Apertura aplicada', 'success', 1800);
+      return;
+    }
+    if (kind === 'close') {
+      updateClip(found.clip.id, { transition: 'none', transitionDuration: 0.6, fadeIn: 0, fadeOut: 0.9 });
+      toast('Cierre aplicado', 'success', 1800);
+      return;
+    }
+    const fades = TRANSITION_FADES[kind] || { fadeIn: 0.2, fadeOut: 0.2 };
+    updateClip(found.clip.id, {
+      transition: kind,
+      transitionDuration: 0.6,
+      ...fades,
+    });
+    const label = TRANSITIONS.find((item) => item.id === kind)?.label || kind;
+    toast(kind === 'none' ? 'Transición eliminada' : `Transición “${label}” aplicada`, 'success', 1800);
+  }
+
+  async function applyTemplate(template) {
+    const ok = await confirmDialog({
+      title: `Plantilla “${template.name}”`,
+      message: 'Se creará un proyecto nuevo con esta plantilla y se guardará el proyecto actual. Después podrás añadir tus propios medios.',
+      confirmLabel: 'Crear proyecto',
+    });
+    if (!ok) return;
+    await saveNow();
+    await newProject(template.name);
+    updateProject({ ratio: template.ratio, resolution: '1080p', fps: 30 });
+    const clip = addTextClip(template.content, {
+      start: 0.4,
+      duration: 6,
+      preset: { size: template.size, weight: 900, color: template.color, x: 0, y: -6 },
+    });
+    if (template.subtitle) {
+      addTextClip(template.subtitle, {
+        start: 0.4,
+        duration: 6,
+        allowOverlap: true,
+        newTrack: true,
+        preset: { size: Math.round(template.size * 0.42), weight: 500, color: template.accent || '#ffffff', x: 0, y: 32 },
+      });
+    }
+    if (clip) seek(clip.start + 0.05);
+    toast('Plantilla aplicada. Añade tus medios para completarla.', 'success', 3800);
+  }
+
+  async function importSrt(file) {
+    try {
+      const text = await file.text();
+      const cues = parseSrt(text);
+      if (!cues.length) {
+        toast('No se encontraron subtítulos válidos en el archivo', 'error');
+        return;
+      }
+      let added = 0;
+      for (const cue of cues.slice(0, 200)) {
+        addTextClip(cue.content, {
+          start: cue.start,
+          duration: clamp(cue.end - cue.start, 0.4, 30),
+          preset: { size: 56, weight: 600, color: '#ffffff' },
+        });
+        added += 1;
+      }
+      toast(`${added} subtítulo${added === 1 ? '' : 's'} importado${added === 1 ? '' : 's'}`, 'success');
+    } catch (error) {
+      console.error(error);
+      toast('No se pudo leer el archivo SRT', 'error');
+    }
+  }
+
+  function unavailable(title, message) {
+    openModal({
+      title,
+      width: 430,
+      body: `<div class="modal-note" style="margin:0">${escapeHtml(message)}</div>`,
+      footer: `<button class="btn btn-primary" data-close-unavailable>Entendido</button>`,
+      onMount(modal) {
+        modal.foot.querySelector('[data-close-unavailable]').addEventListener('click', modal.close);
+      },
+    });
+  }
+
+  function audioPanel(audioMedia) {
+    return `
+      <div class="media-search-row">
+        <label class="search-box">${icon('search', 13)}<input data-media-search placeholder="Buscar audio" value="${escapeHtml(searchQuery)}" /></label>
+        <span class="file-count">${audioMedia.length}</span>
+      </div>
+      <button class="media-drop compact" data-record>
+        <div class="import-cta"><span class="import-round">${icon('mic', 14)}</span><span>Grabar voz</span></div>
+        <p>Graba una narración con tu micrófono</p>
+      </button>
+      ${audioMedia.length
+        ? `<div class="media-grid">${audioMedia.map(mediaCard).join('')}</div>`
+        : panelEmpty('Sin audio todavía', 'Importa música o graba tu voz para empezar.', 'music')}`;
+  }
+
+  function mediaPanel(media) {
+    const filtered = media.filter((item) => mediaFilter === 'all' || item.kind === mediaFilter);
+    const top = `
+      <div class="media-search-row">
+        <label class="search-box">${icon('search', 13)}<input data-media-search placeholder="Buscar medios" value="${escapeHtml(searchQuery)}" /></label>
+        <span class="file-count">${filtered.length} archivo${filtered.length === 1 ? '' : 's'}</span>
+      </div>`;
+    if (!state.media.size) {
+      return `
+        <div class="media-drop" data-import>
+          <div class="import-cta"><span class="import-round">${icon('plus', 15)}</span><span>Importar</span></div>
+          <p>Arrastra y suelta los videos, las fotos y los archivos de audio aquí</p>
+        </div>
+        <div class="tools-divider"><span>¿No tienes archivos multimedia? Crea con estas herramientas</span></div>
+        <div class="media-tool-cards">
+          <button class="media-tool-card" data-generate>${icon('wand', 20)}<span>Generar</span></button>
+          <button class="media-tool-card" data-panel-link="avatar">${icon('avatar', 20)}<span>Avatares de IA</span></button>
+          <button class="media-tool-card" data-record>${icon('record', 20)}<span>Grabar</span></button>
+          <button class="media-tool-card" data-open-capcut>${icon('folderOpen', 20)}<span>CapCut</span></button>
+        </div>`;
+    }
+    return `
+      ${top}
+      ${filtered.length
+        ? `<div class="media-grid">${filtered.map(mediaCard).join('')}</div>`
+        : panelEmpty('No hay archivos de este tipo', 'Cambia el filtro o importa un archivo nuevo.', 'film')}
+      <div class="media-tool-cards small">
+        <button class="media-tool-card" data-generate>${icon('wand', 17)}<span>Generar</span></button>
+        <button class="media-tool-card" data-record>${icon('record', 17)}<span>Grabar</span></button>
+      </div>`;
+  }
+
+  function activeTextClip() {
+    const found = selectedClip();
+    return found && found.clip.kind === 'text' ? found.clip : null;
+  }
+
+  function applyTextPatch(patch, message = 'Texto actualizado') {
+    const clip = activeTextClip();
+    if (clip) {
+      updateClip(clip.id, { text: patch });
+      toast(message, 'success', 1400);
+      return;
+    }
+    addTextClip('Tu texto aquí', { start: state.playhead, preset: { text: patch } });
+    toast(`${message} y añadido en el cursor`, 'success', 1600);
+  }
+
+  function applyTextAnimation(item) {
+    const patch = item
+      ? { animation: item.id, animationPhase: item.phase, animationDuration: item.duration }
+      : { animation: 'none' };
+    applyTextPatch(patch, item ? `Animación “${item.label}” aplicada` : 'Animación eliminada');
+  }
+
+  function speakTts() {
+    if (!speech || typeof SpeechSynthesisUtterance === 'undefined') {
+      toast('Este sistema no ofrece voces locales para la vista previa', 'warning');
+      return;
+    }
+    speech.cancel();
+    const area = body.querySelector('[data-tts-text]');
+    const content = (area?.value || activeTextClip()?.text?.content || '').trim();
+    if (!content) {
+      toast('Escribe el texto que quieres escuchar', 'warning');
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(content);
+    utterance.lang = 'es-ES';
+    utterance.rate = ttsRate;
+    utterance.pitch = ttsPitch;
+    const voice = ttsVoices.find((item) => item.voiceURI === ttsVoice);
+    if (voice) {
+      utterance.voice = voice;
+      utterance.lang = voice.lang || utterance.lang;
+    }
+    utterance.onerror = (event) => {
+      if (event.error && !['canceled', 'interrupted'].includes(event.error)) {
+        toast('No se pudo reproducir la voz del sistema', 'warning');
+      }
+    };
+    speech.speak(utterance);
+    toast('Reproduciendo vista previa de voz', 'info', 1300);
+  }
+
+  function textStyleSample(style) {
+    const patch = style.patch || {};
+    const background = patch.background && patch.background !== 'transparent' ? patch.background : '#343434';
+    const color = patch.color || '#ffffff';
+    const weight = patch.weight || 700;
+    const font = patch.font ? `'${patch.font}', sans-serif` : 'inherit';
+    const size = clamp((patch.size || 72) * 0.17, 11, 22);
+    const stroke = patch.strokeWidth
+      ? `-webkit-text-stroke:${Math.max(0.5, patch.strokeWidth * 9)}px ${patch.strokeColor || '#000000'};`
+      : '';
+    const glow = patch.glow ? `text-shadow:0 0 8px ${patch.glowColor || '#00e5d0'};` : '';
+    const radius = clamp((patch.backgroundRadius ?? 0.16) * 30, 2, 14);
+    return `background:${background};color:${color};font-weight:${weight};font-family:${font};font-size:${size}px;border-radius:${radius}px;${stroke}${glow}`;
+  }
+
+  function bubbleSample(bubble) {
+    const patch = bubble.patch || {};
+    const alpha = Number.isFinite(Number(patch.backgroundAlpha)) ? Number(patch.backgroundAlpha) : 1;
+    const background = patch.background === 'transparent'
+      ? 'transparent'
+      : rgbaColor(patch.background || '#ffffff', alpha);
+    const border = patch.backgroundBorderWidth
+      ? `${Math.max(1, patch.backgroundBorderWidth * 520)}px solid ${patch.backgroundBorderColor || '#ffffff'}`
+      : '1px dashed #5a5a5a';
+    const radius = clamp((patch.backgroundRadius ?? 0.16) * 46, 2, 22);
+    return `background:${background};color:${patch.color || '#ffffff'};border:${border};border-radius:${radius}px;`;
+  }
+
+  function effectSample(effect) {
+    const patch = effect.patch || {};
+    const color = patch.color || '#ffffff';
+    const stroke = patch.strokeWidth
+      ? `-webkit-text-stroke:${Math.max(0.5, patch.strokeWidth * 22)}px ${patch.strokeColor || '#000000'};`
+      : '';
+    const shadows = [];
+    if (patch.glow) shadows.push(`0 0 ${8 + (patch.glowBlur || 0.3) * 16}px ${patch.glowColor || '#00e5d0'}`);
+    if (patch.shadow) {
+      const distance = (patch.shadowDistance || 0.05) * 18;
+      shadows.push(`${distance}px ${distance}px ${(patch.shadowBlur || 0.2) * 10}px ${patch.shadowColor || '#000000'}`);
+    }
+    return `color:${color};${stroke}${shadows.length ? `text-shadow:${shadows.join(',')};` : ''}`;
+  }
+
+  function textBasicPanel() {
+    return `
+      <button class="text-default-card" data-add-text>
+        <span class="text-default-plus">${icon('plus', 15)}</span>
+        <span class="text-default-copy"><strong>Texto predeterminado</strong></span>
+      </button>
+      <div class="text-panel-section-head"><span>Estilo preestablecido</span><b>${TEXT_STYLES.length}</b></div>
+      <div class="text-style-grid">
+        ${TEXT_STYLES.map((style, index) => `
+          <button class="text-style-card" data-preset="${index}" title="Añadir texto con estilo ${style.label}">
+            <span class="text-style-sample" style="${textStyleSample(style)}">Aa</span>
+            <span class="text-style-name">${escapeHtml(style.label)}</span>
+          </button>`).join('')}
+      </div>
+      <div class="panel-empty" style="padding-top:10px">Haz clic en un estilo para añadirlo en el cursor. Puedes ajustar todos los detalles en el panel derecho.</div>`;
+  }
+
+  function textBubblePanel() {
+    const clip = activeTextClip();
+    return `
+      <div class="text-panel-hint">${clip ? `Se aplicará a “${escapeHtml((clip.text?.content || '').slice(0, 34))}”.` : 'Elige una burbuja: se creará un texto nuevo con ese estilo.'}</div>
+      <div class="text-bubble-grid">
+        ${TEXT_BUBBLES.map((bubble) => `
+          <button class="text-bubble-card" data-text-bubble="${bubble.id}">
+            <span class="text-bubble-sample" style="${bubbleSample(bubble)}">Aa</span>
+            <span class="text-style-name">${escapeHtml(bubble.label)}</span>
+          </button>`).join('')}
+      </div>
+      <div class="modal-note" style="margin:10px 12px 16px">${icon('info', 13)} Las burbujas son fondos redondeados con borde opcional; se dibujan en el preview y en la exportación.</div>`;
+  }
+
+  function textEffectPanel() {
+    const clip = activeTextClip();
+    const active = clip?.text?.strokeWidth > 0 || clip?.text?.glow || clip?.text?.shadow;
+    return `
+      <div class="text-panel-hint">${clip ? 'Aplica un efecto al texto seleccionado.' : 'Elige un efecto: se creará un texto nuevo con ese acabado.'}</div>
+      <div class="text-effect-grid">
+        ${TEXT_EFFECTS.map((effect) => `
+          <button class="text-effect-card" data-text-effect="${effect.id}">
+            <span class="text-effect-sample" style="${effectSample(effect)}">Aa</span>
+            <span class="text-style-name">${escapeHtml(effect.label)}</span>
+          </button>`).join('')}
+      </div>
+      <div class="panel-empty" style="padding-top:10px">${active ? 'Los efectos se combinan con el color, el trazo y la sombra del panel derecho.' : 'Sin efectos adicionales en el texto seleccionado.'}</div>`;
+  }
+
+  function textAnimationPanel() {
+    const clip = activeTextClip();
+    const activeId = clip?.text?.animation || 'none';
+    return `
+      <div class="text-panel-hint">${clip ? 'Selecciona una animación para el texto.' : 'Elige una animación: se creará un texto nuevo con ella.'}</div>
+      ${clip ? `<button class="btn btn-small btn-block" data-text-animation="none" style="margin:0 12px 8px;width:calc(100% - 24px)">${icon('rotate', 13)} Quitar animación</button>` : ''}
+      ${TEXT_ANIMATION_GROUPS.map((group) => `
+        <div class="text-panel-section-head"><span>${group.label}</span><b>${group.items.length}</b></div>
+        <div class="text-animation-grid">
+          ${group.items.map((item) => `
+            <button class="text-animation-card${activeId === item.id ? ' active' : ''}" data-text-animation="${item.id}">
+              <span class="anim-preview anim-${item.id}">Aa</span>
+              <span class="text-style-name">${escapeHtml(item.label)}</span>
+              ${activeId === item.id ? `<span class="text-animation-check">${icon('check', 10)}</span>` : ''}
+            </button>`).join('')}
+        </div>`).join('')}
+      <div class="modal-note" style="margin:10px 12px 16px">${icon('info', 13)} Las animaciones de entrada y salida se reproducen al inicio y al final del clip. Los bucles se repiten mientras el texto está visible.</div>`;
+  }
+
+  function textTrackingPanel() {
+    return `
+      <div class="text-track-hero">
+        <span class="text-track-art">${icon('text', 30)}</span>
+        <strong>Seguimiento de movimiento</strong>
+        <p>El seguimiento de CapCut analiza el video en la nube para pegar el texto a una persona u objeto. Cacup es un editor local y no incluye ese análisis.</p>
+      </div>
+      <div class="text-info-card">
+        <strong>Alternativa sin conexión</strong>
+        <p>Puedes mover el texto manualmente en el preview y ajustar la posición con fotogramas clave en la línea de tiempo. El resultado se mantiene editable y se exporta igual.</p>
+        <button class="btn btn-block" data-add-text>${icon('plus', 14)} Añadir texto y colocarlo a mano</button>
+      </div>
+      <div class="text-info-card muted-card">La detección automática de caras, objetos y puntos de seguimiento necesita un servicio externo. No se envía ningún archivo desde Cacup.</div>`;
+  }
+
+  function ttsVoiceOptions() {
+    if (!ttsVoices.length) return '<option value="">Voz del sistema</option>';
+    const sorted = [...ttsVoices].sort((a, b) => {
+      const aEs = a.lang?.toLowerCase().startsWith('es') ? 0 : 1;
+      const bEs = b.lang?.toLowerCase().startsWith('es') ? 0 : 1;
+      return aEs - bEs || a.name.localeCompare(b.name);
+    });
+    return `<option value="">Voz automática (español)</option>${sorted.map((voice) => `<option value="${escapeHtml(voice.voiceURI)}" ${ttsVoice === voice.voiceURI ? 'selected' : ''}>${escapeHtml(voice.name)} (${escapeHtml(voice.lang || 'sistema')})</option>`).join('')}`;
+  }
+
+  function textToSpeechPanel() {
+    const clip = activeTextClip();
+    const sample = clip?.text?.content || 'Hola, esta es una vista previa de la voz de Cacup.';
+    return `
+      <div class="text-panel-hint">Vista previa con las voces instaladas en Windows. El audio no se añade a la línea de tiempo.</div>
+      <div class="text-tts-form">
+        <div class="field">
+          <label>Texto para leer</label>
+          <textarea class="input" data-tts-text rows="3" maxlength="400">${escapeHtml(sample)}</textarea>
+        </div>
+        <div class="field">
+          <label>Voz</label>
+          <select class="input" data-tts-voice>${ttsVoiceOptions()}</select>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Velocidad <b data-tts-rate-readout>${ttsRate.toFixed(2)}×</b></label>
+            <input type="range" data-tts-rate min="0.5" max="2" step="0.05" value="${ttsRate}" />
+          </div>
+          <div class="field">
+            <label>Tono <b data-tts-pitch-readout>${ttsPitch.toFixed(2)}</b></label>
+            <input type="range" data-tts-pitch min="0.5" max="1.8" step="0.05" value="${ttsPitch}" />
+          </div>
+        </div>
+        <div class="text-tts-actions">
+          <button class="btn btn-primary" data-tts-play>${icon('play', 13)} Reproducir</button>
+          <button class="btn" data-tts-stop>${icon('pause', 13)} Detener</button>
+        </div>
+        <button class="btn btn-ghost btn-block" data-tts-use-text>${icon('text', 13)} Usar el texto seleccionado</button>
+      </div>
+      <div class="text-info-card">${icon('mic', 14)} <strong>Voces locales</strong><p>Se usan las voces de Windows mediante <code>speechSynthesis</code>. Si no aparece ninguna voz en la lista, instala un paquete de voz en Configuración → Hora e idioma → Voz.</p></div>
+      <div class="text-info-card muted-card">La generación de voz con IA y la clonación de voz necesitan conexión. No están disponibles en Cacup sin conexión.</div>`;
+  }
+
+  function textPanel() {
+    const tabs = [
+      ['text', 'Texto'],
+      ['animation', 'Animación'],
+      ['tracking', 'Seguimiento'],
+      ['tts', 'Texto a voz'],
+      ['avatar', 'Avatares de IA'],
+    ];
+    let content = '';
+    if (textTab === 'text') {
+      const subTabs = [['basic', 'Básico'], ['bubble', 'Burbuja'], ['effect', 'Efectos']];
+      content = `
+        <div class="text-subtabs">
+          ${subTabs.map(([id, label]) => `<button class="text-subtab${textSubTab === id ? ' active' : ''}" data-text-subtab="${id}">${label}</button>`).join('')}
+        </div>
+        ${textSubTab === 'bubble' ? textBubblePanel() : textSubTab === 'effect' ? textEffectPanel() : textBasicPanel()}`;
+    } else if (textTab === 'animation') content = textAnimationPanel();
+    else if (textTab === 'tracking') content = textTrackingPanel();
+    else if (textTab === 'tts') content = textToSpeechPanel();
+    else content = avatarPanel();
+    return `
+      <div class="text-panel-tabs">
+        ${tabs.map(([id, label]) => `<button class="text-panel-tab${textTab === id ? ' active' : ''}" data-text-tab="${id}">${label}</button>`).join('')}
+      </div>
+      <div class="text-panel-content">${content}</div>`;
+  }
+
+  function stickersPanel() {
+    const query = stickerSearch.trim().toLowerCase();
+    const category = STICKER_CATEGORIES.find((item) => item.name === stickerCategory) || STICKER_CATEGORIES[0];
+    const items = query
+      ? STICKERS.filter((sticker) => sticker.toLowerCase().includes(query))
+      : category.items;
+    return `
+      <div class="cat-rail category-chips">
+        ${STICKER_CATEGORIES.map((item) => `<button class="category-chip${!query && item.name === category.name ? ' active' : ''}" data-sticker-category="${escapeHtml(item.name)}">${escapeHtml(item.name)}</button>`).join('')}
+      </div>
+      <div class="cat-main">
+        <label class="search-box filter-search">${icon('search', 13)}<input data-sticker-search placeholder="Buscar sticker" value="${escapeHtml(stickerSearch)}" /><span class="filter-count">${items.length}</span></label>
+        <div class="sticker-grid">
+          ${items.map((sticker) => `<button class="sticker-btn" data-sticker="${escapeHtml(sticker)}" title="Añadir ${escapeHtml(sticker)}">${sticker}</button>`).join('')}
+        </div>
+        <div class="panel-empty" style="padding-top:6px">Los stickers son capas independientes. Escálalos, muévelos y rótalos desde Detalles.</div>
+      </div>`;
+  }
+
+  function effectPanel() {
+    const found = selectedClip();
+    const isVisual = found && ['video', 'image'].includes(found.clip.kind);
+    const active = isVisual ? found.clip.effect || 'none' : 'none';
+    const query = effectSearch.trim().toLowerCase();
+    const entries = Object.entries(EFFECTS).filter(([, value]) => {
+      if (query) return value.label.toLowerCase().includes(query);
+      return effectCategory === 'Todos' || value.category === effectCategory;
+    });
+    const swatch = (value) => {
+      const colors = value.colors?.length
+        ? value.colors
+        : value.accent
+          ? [value.accent, '#8ffcff', '#ffffff']
+          : ['#2f6b73', '#d3b26d', '#8c3559'];
+      return `linear-gradient(135deg,${colors[0]},${colors[1 % colors.length]} 55%,${colors[2 % colors.length]})`;
+    };
+    return `
+      <div class="cat-rail category-chips">
+        ${['Todos', ...EFFECT_CATEGORIES].map((name) => `<button class="category-chip${name === effectCategory ? ' active' : ''}" data-effect-category="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join('')}
+      </div>
+      <div class="cat-main">
+        <label class="search-box filter-search">${icon('search', 13)}<input data-effect-search placeholder="Buscar efecto" value="${escapeHtml(effectSearch)}" /><span class="filter-count">${entries.length}</span></label>
+        <div class="effect-grid">
+          ${entries.map(([key, value]) => `
+            <button class="effect-card${active === key ? ' active' : ''}" data-effect="${key}">
+              <div class="effect-preview" style="filter:${value.css}">
+                <span class="effect-glyph">${value.icon}</span>
+                <span class="effect-swatch" style="background:${swatch(value)}"></span>
+              </div>
+              <div class="filter-name"><span>${value.label}</span>${active === key ? icon('check', 11) : ''}</div>
+            </button>`).join('')}
+        </div>
+        <div class="panel-empty" style="padding-top:2px">${active !== 'none' ? `Efecto “${EFFECTS[active]?.label || active}” aplicado al clip.` : 'Selecciona un clip y elige un efecto visual.'}</div>
+      </div>`;
+  }
+
+  function transitionPanel() {
+    const found = selectedClip();
+    const active = found?.clip.transition || 'none';
+    const categories = ['Todas', ...new Set(TRANSITIONS.map((item) => item.category))];
+    const entries = TRANSITIONS.filter((item) => transitionCategory === 'Todas' || item.category === transitionCategory);
+    return `
+      <div class="cat-rail category-chips">
+        ${categories.map((name) => `<button class="category-chip${name === transitionCategory ? ' active' : ''}" data-transition-category="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join('')}
+      </div>
+      <div class="cat-main">
+        <div class="transition-grid">
+          ${entries.map((item) => `
+            <button class="transition-card${active === item.id ? ' active' : ''}" data-transition="${item.id}" title="${escapeHtml(item.category)}">
+              <div class="transition-preview ${item.className}"><i></i></div>
+              <div class="filter-name"><span>${item.label}</span>${active === item.id ? icon('check', 11) : ''}</div>
+            </button>`).join('')}
+        </div>
+        <div class="panel-empty" style="padding-top:2px">La transición se aplica al inicio del clip seleccionado y se mezcla con el clip anterior. Ajusta su duración desde Detalles.</div>
+      </div>`;
+  }
+
+  function captionsPanel() {
+    const textClips = state.project?.tracks
+      .filter((track) => track.type === 'text')
+      .flatMap((track) => track.clips.filter((clip) => clip.kind === 'text'))
+      .sort((a, b) => a.start - b.start) || [];
+    return `
+      <div class="details-section" style="margin:2px 12px 6px">Estilo de subtítulo</div>
+      <div class="caption-styles">
+        ${CAPTION_STYLES.map((style) => `
+          <button class="caption-style${captionStyle === style.id ? ' active' : ''}" data-caption-style="${style.id}">
+            <span style="font-weight:${style.weight};color:${style.color};${style.background !== 'transparent' ? `background:${style.background};` : ''}">${style.label}</span>
+            ${captionStyle === style.id ? icon('check', 11) : ''}
+          </button>`).join('')}
+      </div>
+      <div class="caption-actions">
+        <button class="btn btn-primary btn-block" data-add-subtitle>${icon('plus', 14)} Añadir subtítulo en el cursor</button>
+        <button class="btn btn-block" data-import-srt>${icon('upload', 14)} Importar archivo .srt</button>
+      </div>
+      ${textClips.length ? `
+        <div class="caption-list-head">Subtítulos en la línea de tiempo <b>${textClips.length}</b></div>
+        <div class="caption-list">
+          ${textClips.map((clip) => `
+            <button class="caption-row${state.selection === clip.id ? ' active' : ''}" data-caption-select="${clip.id}">
+              <span class="caption-time">${formatTime(clip.start)}</span>
+              <span class="caption-text">${escapeHtml(clip.text?.content || '')}</span>
+            </button>`).join('')}
+        </div>` : ''}
+      <div class="modal-note" style="margin:8px 12px 16px">${icon('info', 13)} La transcripción automática necesita un servicio de IA en la nube. Puedes escribir subtítulos o importarlos en SRT.</div>`;
+  }
+
+  function avatarPanel() {
+    return `
+      ${panelEmpty('Avatares locales', 'Añade un personaje como capa con fondo de color. Después puedes moverlo, escalarlo y combinarlo con tus videos.', 'avatar')}
+      <div class="avatar-grid">
+        ${AVATAR_PRESETS.map((preset) => `
+          <button class="avatar-card" data-avatar="${preset.id}" title="Añadir ${preset.name}">
+            <span class="avatar-art" style="background:${preset.color}">${preset.emoji}</span>
+            <span>${preset.name}</span>
+          </button>`).join('')}
+      </div>
+      <div class="modal-note" style="margin:8px 12px 16px">La generación de avatares animados con IA requiere conexión y no está disponible sin conexión.</div>`;
+  }
+
+  function adjustPanel() {
+    const found = selectedClip();
+    const clip = found?.clip;
+    if (!clip) {
+      return panelEmpty('Nada seleccionado', 'Selecciona un clip de la línea de tiempo para aplicarle un preset de ajuste.', 'adjust');
+    }
+    const visual = clip.kind === 'video' || clip.kind === 'image';
+    if (!visual) {
+      return panelEmpty('Clip no visual', 'Los presets de ajuste de color se aplican a clips de video o imagen. Selecciona otro clip.', 'adjust');
+    }
+    const current = clip.adjust || {};
+    const matches = (preset) => {
+      if (!preset.adjust) return false;
+      const keys = new Set([...Object.keys(preset.adjust), ...Object.keys(current)]);
+      for (const key of keys) {
+        if (Math.round((preset.adjust[key] ?? defaultAdjustValue(key)) * 10) !== Math.round((current[key] ?? defaultAdjustValue(key)) * 10)) return false;
+      }
+      return true;
+    };
+    const all = allAdjustPresets();
+    const query = adjustSearch.trim().toLowerCase();
+    const activeId = all.find(matches)?.id || 'custom';
+    const entries = all.filter((item) => {
+      if (query) return item.label.toLowerCase().includes(query);
+      return adjustCategory === 'Todos' || item.category === adjustCategory;
+    });
+    return `
+      <div class="cat-rail category-chips">
+        ${['Todos', ...ADJUST_CATEGORIES].map((name) => `<button class="category-chip${name === adjustCategory ? ' active' : ''}" data-adjust-category="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join('')}
+      </div>
+      <div class="cat-main">
+        <div class="adjust-actions">
+          <button class="btn btn-small" data-adjust-save>${icon('plus', 13)} Agregar ajuste</button>
+          <button class="btn btn-small btn-ghost" data-reset-clip>${icon('rotate', 13)} Restablecer</button>
+        </div>
+        <label class="search-box filter-search">${icon('search', 13)}<input data-adjust-search placeholder="Buscar ajuste" value="${escapeHtml(adjustSearch)}" /><span class="filter-count">${entries.length}</span></label>
+        <div class="adjust-grid">
+          ${entries.map((item) => `
+            <button class="adjust-card${activeId === item.id ? ' active' : ''}" data-adjust-preset="${item.id}">
+              <div class="adjust-preview" style="filter:${item.adjust ? adjustCss(item.adjust) : 'none'}"></div>
+              <div class="filter-name"><span>${escapeHtml(item.label)}</span>${activeId === item.id ? icon('check', 11) : ''}</div>
+            </button>`).join('')}
+        </div>
+        <div class="panel-empty" style="padding-top:2px">${activeId === 'custom'
+          ? 'Ajuste personalizado: mueve los deslizadores de Detalles y pulsa “Agregar ajuste” para guardarlo en Tuyos.'
+          : `Preset “${escapeHtml(all.find((item) => item.id === activeId)?.label || '')}” aplicado al clip.`}</div>
+      </div>`;
+  }
+
+  function timelineRail() {
+    const tracks = state.project?.tracks || [];
+    return `
+      <div class="rail-section-head"><span>Pistas</span><b>${tracks.length}</b></div>
+      <div class="rail-track-list">
+        ${tracks.map((track) => {
+          const meta = track.type === 'audio' ? 'music' : track.type === 'text' ? 'text' : 'film';
+          return `
+            <div class="rail-track-row">
+              <span class="rail-track-icon">${icon(meta, 14)}</span>
+              <span class="rail-track-meta"><strong>${escapeHtml(track.name)}</strong><small>${track.clips.length} clip${track.clips.length === 1 ? '' : 's'}</small></span>
+              <span class="rail-track-state">${track.hidden || track.muted ? 'Oculta' : ''}</span>
+            </div>`;
+        }).join('')}
+      </div>
+      <button class="rail-action" data-rail-add-text>${icon('plus', 13)} Añadir texto en el cursor</button>
+      <div class="rail-note">Arrastra los clips para moverlos, usa los tiradores de los extremos para recortar y pulsa B para dividir en el cursor.</div>`;
+  }
+
+  function secondaryRail() {
+    const others = state.projects.filter((item) => item.id !== state.project?.id);
+    return `
+      <div class="rail-section-head"><span>Proyectos secundarios</span><b>${others.length}</b></div>
+      ${others.length
+        ? `<div class="rail-project-list">${others.map((item) => `
+            <button class="rail-project" data-open-project="${item.id}">
+              <span class="rail-project-thumb">${item.thumb ? `<img src="${item.thumb}" alt="" />` : icon('film', 18)}</span>
+              <span class="rail-project-meta"><strong>${escapeHtml(item.name)}</strong><small>${item.ratio || '16:9'} · ${item.resolution || '1080p'}</small></span>
+            </button>`).join('')}</div>`
+        : `<div class="rail-note">No hay otros proyectos todavía. Crea uno nuevo desde el menú o vuelve al inicio.</div>`}
+      <button class="rail-action" data-rail-home>${icon('home', 13)} Ir al inicio</button>`;
+  }
+
+  function bodyForPanel(panel) {
+    const media = Array.from(state.media.values()).reverse();
+    if (panel === 'media') return mediaPanel(media);
+    if (panel === 'audio') return audioPanel(media.filter((item) => item.kind === 'audio'));
+    if (panel === 'text') return textPanel();
+    if (panel === 'stickers') return stickersPanel();
+    if (panel === 'effects') return effectPanel();
+    if (panel === 'filters') {
+      const found = selectedClip();
+      const active = found && ['video', 'image'].includes(found.clip.kind) ? found.clip.filter : null;
+      return filterGallery(active, true, filterCategory);
+    }
+    if (panel === 'transitions') return transitionPanel();
+    if (panel === 'captions') return captionsPanel();
+    if (panel === 'adjust') return adjustPanel();
+    if (panel === 'templates') {
+      return `
+        <div class="template-grid">
+          ${TEMPLATES.map((template) => `
+            <button class="template-card" data-template="${template.id}">
+              <div class="template-art" style="background:${template.art};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;padding:12px">
+                <span style="color:#fff;font-weight:900;font-size:14px;line-height:1.15">${escapeHtml(template.content.replace('\n', ' '))}</span>
+                <small style="font-size:8px;font-weight:500;color:${template.accent || '#fff'};opacity:.92">${escapeHtml(template.subtitle || '')}</small>
+              </div>
+              <span>${template.name}</span>
+            </button>`).join('')}
+        </div>
+        <div class="panel-empty">Las plantillas crean un proyecto nuevo con una composición de texto y subtítulo.</div>`;
+    }
+    if (panel === 'avatar') return avatarPanel();
+    return panelEmpty('Panel en construcción', 'Esta sección estará disponible próximamente.', 'layers');
+  }
+
+  function renderRail() {
+    rail.querySelectorAll('[data-rail]').forEach((item) => {
+      const value = item.dataset.rail;
+      item.classList.toggle('active', value === railView && value !== 'settings');
+    });
+    rail.querySelectorAll('[data-rail-group]').forEach((item) => {
+      item.classList.toggle('open', openGroup === item.dataset.railGroup);
+    });
+    rail.querySelectorAll('[data-rail-sub]').forEach((sub) => {
+      sub.classList.toggle('hidden', openGroup !== sub.dataset.railSub);
+    });
+  }
+
+  function renderHeader() {
+    if (railView !== 'media') {
+      const title = railView === 'timeline' ? 'Línea de tiempo' : 'Proyectos secundarios';
+      head.innerHTML = `
+        <div class="content-toolbar">
+          <h2>${title}</h2>
+          <div class="head-actions"><button class="icon-btn" data-help title="Ayuda">${icon('info', 15)}</button></div>
+        </div>`;
+      return;
+    }
+    const panel = state.panel;
+    if (panel === 'media') {
+      if (!state.media.size) {
+        head.innerHTML = '';
+        return;
+      }
+      head.innerHTML = `
+        <div class="media-top">
+          <button class="import-pill" data-import>Importar ${icon('chevronUp', 12)}</button>
+          <button class="icon-btn" data-help title="Ayuda sobre este panel">${icon('info', 15)}</button>
+        </div>`;
+      return;
+    }
+    head.innerHTML = `
+      <div class="content-toolbar">
+        <h2>${PANEL_TITLES[panel] || 'Panel'}</h2>
+        <div class="head-actions">
+          ${['audio', 'avatar'].includes(panel) ? `<button class="icon-btn" data-import title="Importar archivos">${icon('plus', 16)}</button>` : ''}
+          <button class="icon-btn" data-help title="Ayuda sobre este panel">${icon('info', 15)}</button>
+        </div>
+      </div>`;
+  }
+
+  function renderFoot() {
+    if (railView !== 'media') { foot.innerHTML = ''; return; }
+    const panel = state.panel;
+    if (panel === 'audio') {
+      foot.innerHTML = `
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-primary" style="flex:1" data-record>${icon('mic', 14)} Grabar</button>
+          <button class="btn" style="flex:1" data-import>${icon('import', 14)} Importar</button>
+        </div>`;
+    } else if (panel === 'text') {
+      const canAddText = textTab === 'text';
+      foot.innerHTML = canAddText
+        ? `<button class="btn btn-primary btn-block" data-add-text>${icon('plus', 14)} Añadir texto</button>`
+        : '';
+    } else if (panel === 'avatar') {
+      foot.innerHTML = `<button class="btn btn-block" data-avatar-upload>${icon('upload', 14)} Subir foto</button>`;
+    } else {
+      foot.innerHTML = '';
+    }
+  }
+
+  function render() {
+    if (suppressRender) return;
+    const top = body.scrollTop;
+    renderRail();
+    if (railView === 'timeline') {
+      head.innerHTML = `
+        <div class="content-toolbar">
+          <h2>Línea de tiempo</h2>
+          <div class="head-actions"><button class="icon-btn" data-help title="Ayuda">${icon('info', 15)}</button></div>
+        </div>`;
+      body.innerHTML = timelineRail();
+      body.classList.remove('cat');
+      foot.innerHTML = '';
+    } else if (railView === 'secondary') {
+      head.innerHTML = `
+        <div class="content-toolbar">
+          <h2>Proyectos secundarios</h2>
+          <div class="head-actions"><button class="icon-btn" data-help title="Ayuda">${icon('info', 15)}</button></div>
+        </div>`;
+      body.innerHTML = secondaryRail();
+      body.classList.remove('cat');
+      foot.innerHTML = '';
+    } else {
+      renderHeader();
+      body.innerHTML = bodyForPanel(state.panel);
+      body.classList.toggle('cat', Boolean(body.querySelector(':scope > .cat-rail')));
+      renderFoot();
+    }
+    body.scrollTop = top;
+    revealActiveChip();
+  }
+
+  function debouncedCatalogRender(selector) {
+    clearTimeout(filterSearchTimer);
+    filterSearchTimer = setTimeout(() => {
+      render();
+      const input = body.querySelector(selector);
+      if (input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+    }, 180);
+  }
+
+  function revealActiveChip() {
+    body.querySelectorAll('.category-chips').forEach((row) => {
+      const active = row.querySelector('.category-chip.active');
+      if (!active) return;
+      const vertical = getComputedStyle(row).flexDirection === 'column';
+      const rowRect = row.getBoundingClientRect();
+      const chipRect = active.getBoundingClientRect();
+      if (vertical) {
+        const target = row.scrollTop + chipRect.top - rowRect.top - (rowRect.height - chipRect.height) / 2;
+        row.scrollTop = Math.max(0, Math.min(target, row.scrollHeight - row.clientHeight));
+        return;
+      }
+      const target = row.scrollLeft + chipRect.left - rowRect.left - (rowRect.width - chipRect.width) / 2;
+      row.scrollLeft = Math.max(0, Math.min(target, row.scrollWidth - row.clientWidth));
+    });
+  }
+
+  function openHelp() {
+    openModal({
+      title: PANEL_TITLES[state.panel] || 'Ayuda',
+      width: 420,
+      body: `<div class="modal-note" style="margin:0">${escapeHtml(PANEL_HELP[state.panel] || '')}</div>`,
+      footer: `<button class="btn btn-primary" data-help-close>Entendido</button>`,
+      onMount(modal) {
+        modal.foot.querySelector('[data-help-close]').addEventListener('click', modal.close);
+      },
+    });
+  }
+
+  host.addEventListener('click', async (event) => {
+    const railItem = event.target.closest('[data-rail]');
+    if (railItem) {
+      const value = railItem.dataset.rail;
+      if (value === 'settings') {
+        openModal({
+          title: 'Ajustes',
+          width: 430,
+          body: `<div class="modal-note" style="margin:0">Cacup funciona sin cuenta. Los proyectos y medios se guardan en el almacenamiento local de este navegador.</div>`,
+          footer: `<button class="btn btn-primary" data-close-settings>Listo</button>`,
+          onMount(modal) {
+            modal.foot.querySelector('[data-close-settings]').addEventListener('click', modal.close);
+          },
+        });
+        return;
+      }
+      if (value === 'media') {
+        if (railView !== 'media' || state.panel !== 'media') {
+          railView = 'media';
+          setPanel('media');
+        }
+        return;
+      }
+      railView = value;
+      openGroup = null;
+      render();
+      return;
+    }
+
+    const group = event.target.closest('[data-rail-group]');
+    if (group) {
+      openGroup = openGroup === group.dataset.railGroup ? null : group.dataset.railGroup;
+      renderRail();
+      return;
+    }
+
+    const railFilter = event.target.closest('[data-rail-filter]');
+    if (railFilter) {
+      mediaFilter = railFilter.dataset.railFilter;
+      railView = 'media';
+      openGroup = null;
+      if (state.panel !== 'media') setPanel('media'); else render();
+      toast(mediaFilter === 'all' ? 'Mostrando todos los medios' : `Mostrando ${railFilter.textContent.toLowerCase()}`, 'info', 1300);
+      return;
+    }
+
+    const aiTool = event.target.closest('[data-ai-tool]');
+    if (aiTool) {
+      unavailable(
+        `${aiTool.textContent} con IA`,
+        'La generación con IA necesita un servicio en la nube. Cacup es un editor local y no incluye estas herramientas; puedes importar tus propios medios o usar las plantillas y los stickers.',
+      );
+      return;
+    }
+
+    if (event.target.closest('[data-space-create]')) {
+      unavailable('Crear espacio de trabajo', 'Los espacios compartidos requieren una cuenta en la nube. En esta versión local, cada proyecto se guarda únicamente en tu navegador.');
+      return;
+    }
+    if (event.target.closest('[data-space-info]')) {
+      unavailable('Espacios', 'Un espacio es una carpeta compartida para trabajar con otras personas. Cacup no tiene cuentas ni colaboración: todo se queda en este equipo.');
+      return;
+    }
+    if (event.target.closest('[data-library-media]')) {
+      railView = 'media';
+      mediaFilter = 'all';
+      openGroup = null;
+      setPanel('media');
+      return;
+    }
+    if (event.target.closest('[data-library-templates]')) {
+      setPanel('templates');
+      return;
+    }
+    if (event.target.closest('[data-rail-add-text]')) {
+      addTextClip('Tu texto aquí', { start: state.playhead });
+      return;
+    }
+    if (event.target.closest('[data-rail-home]')) {
+      goHome();
+      return;
+    }
+    const openProjectButton = event.target.closest('[data-open-project]');
+    if (openProjectButton) {
+      await saveNow();
+      await openProject(openProjectButton.dataset.openProject);
+      return;
+    }
+    if (event.target.closest('[data-open-capcut]')) {
+      openCapCutImportDialog();
+      return;
+    }
+    if (event.target.closest('[data-generate]')) {
+      unavailable('Generar con IA', 'La generación de imágenes y videos con IA requiere un servicio en la nube. Puedes importar tus propios archivos, usar las plantillas o crear títulos y stickers.');
+      return;
+    }
+
+    const help = event.target.closest('[data-help]');
+    if (help) { openHelp(); return; }
+
+    const importButton = event.target.closest('[data-import]');
+    if (importButton) { pickFiles('media', 'video/*,image/*,audio/*,.mkv,.mov,.m4v,.webm,.mp3,.wav,.m4a,.aac,.ogg', true); return; }
+
+    const record = event.target.closest('[data-record]');
+    if (record) { recordVoice(); return; }
+
+    const link = event.target.closest('[data-panel-link]');
+    if (link) { railView = 'media'; setPanel(link.dataset.panelLink); return; }
+
+    const presetButton = event.target.closest('[data-preset]');
+    if (presetButton) {
+      const style = TEXT_STYLES[Number(presetButton.dataset.preset)];
+      if (style) {
+        addTextClip(style.sample || 'Tu texto aquí', {
+          start: state.playhead,
+          preset: { text: style.patch },
+        });
+        toast(`Texto “${style.label}” añadido en el cursor`, 'success', 1600);
+      }
+      return;
+    }
+
+    const textTabButton = event.target.closest('[data-text-tab]');
+    if (textTabButton) {
+      textTab = textTabButton.dataset.textTab;
+      render();
+      return;
+    }
+
+    const textSubTabButton = event.target.closest('[data-text-subtab]');
+    if (textSubTabButton) {
+      textSubTab = textSubTabButton.dataset.textSubtab;
+      render();
+      return;
+    }
+
+    const bubbleButton = event.target.closest('[data-text-bubble]');
+    if (bubbleButton) {
+      const bubble = TEXT_BUBBLES.find((item) => item.id === bubbleButton.dataset.textBubble);
+      if (bubble) applyTextPatch(bubble.patch, `Burbuja “${bubble.label}” aplicada`);
+      return;
+    }
+
+    const textEffectButton = event.target.closest('[data-text-effect]');
+    if (textEffectButton) {
+      const effect = TEXT_EFFECTS.find((item) => item.id === textEffectButton.dataset.textEffect);
+      if (effect) applyTextPatch(effect.patch, `Efecto “${effect.label}” aplicado`);
+      return;
+    }
+
+    const textAnimationButton = event.target.closest('[data-text-animation]');
+    if (textAnimationButton) {
+      const id = textAnimationButton.dataset.textAnimation;
+      applyTextAnimation(id === 'none' ? null : TEXT_ANIMATIONS.find((item) => item.id === id));
+      return;
+    }
+
+    if (event.target.closest('[data-tts-play]')) {
+      speakTts();
+      return;
+    }
+    if (event.target.closest('[data-tts-stop]')) {
+      speech?.cancel();
+      toast('Vista previa detenida', 'info', 1200);
+      return;
+    }
+    if (event.target.closest('[data-tts-use-text]')) {
+      const area = body.querySelector('[data-tts-text]');
+      const clip = activeTextClip();
+      if (area && clip) {
+        area.value = clip.text?.content || '';
+        area.focus();
+        area.select();
+      } else {
+        toast('Selecciona un texto de la línea de tiempo', 'warning');
+      }
+      return;
+    }
+
+    const addText = event.target.closest('[data-add-text]');
+    if (addText) {
+      addTextClip('Tu texto aquí', { start: state.playhead });
+      return;
+    }
+
+    const stickerCategoryButton = event.target.closest('[data-sticker-category]');
+    if (stickerCategoryButton) {
+      stickerCategory = stickerCategoryButton.dataset.stickerCategory;
+      stickerSearch = '';
+      render();
+      return;
+    }
+
+    const effectCategoryButton = event.target.closest('[data-effect-category]');
+    if (effectCategoryButton) {
+      effectCategory = effectCategoryButton.dataset.effectCategory;
+      effectSearch = '';
+      render();
+      return;
+    }
+
+    const filterCategoryButton = event.target.closest('[data-filter-category]');
+    if (filterCategoryButton) {
+      filterCategory = filterCategoryButton.dataset.filterCategory;
+      filterSearch = '';
+      render();
+      return;
+    }
+
+    const transitionCategoryButton = event.target.closest('[data-transition-category]');
+    if (transitionCategoryButton) {
+      transitionCategory = transitionCategoryButton.dataset.transitionCategory;
+      render();
+      return;
+    }
+
+    const adjustCategoryButton = event.target.closest('[data-adjust-category]');
+    if (adjustCategoryButton) {
+      adjustCategory = adjustCategoryButton.dataset.adjustCategory;
+      adjustSearch = '';
+      render();
+      return;
+    }
+
+    const adjustPresetButton = event.target.closest('[data-adjust-preset]');
+    if (adjustPresetButton) {
+      applyAdjustPreset(adjustPresetButton.dataset.adjustPreset);
+      return;
+    }
+
+    const adjustSaveButton = event.target.closest('[data-adjust-save]');
+    if (adjustSaveButton) {
+      void saveCurrentAdjust();
+      return;
+    }
+
+    const stickerButton = event.target.closest('[data-sticker]');
+    if (stickerButton) {
+      const sticker = stickerButton.dataset.sticker;
+      if (sticker) {
+        addStickerClip(sticker, {
+          start: state.playhead,
+          duration: 4,
+          preset: { size: 220 },
+        });
+        toast('Sticker añadido en el cursor', 'success', 1400);
+      }
+      return;
+    }
+
+    const effectButton = event.target.closest('[data-effect]');
+    if (effectButton) {
+      const found = selectedClip();
+      if (!found || !['video', 'image'].includes(found.clip.kind)) {
+        toast('Selecciona un clip de video o imagen para aplicar el efecto', 'warning');
+        return;
+      }
+      updateClip(found.clip.id, { effect: effectButton.dataset.effect });
+      toast(effectButton.dataset.effect === 'none' ? 'Efecto eliminado' : 'Efecto aplicado', 'success', 1400);
+      return;
+    }
+
+    const captionStyleButton = event.target.closest('[data-caption-style]');
+    if (captionStyleButton) {
+      captionStyle = captionStyleButton.dataset.captionStyle;
+      const style = CAPTION_STYLES.find((item) => item.id === captionStyle) || CAPTION_STYLES[0];
+      const found = selectedClip();
+      if (found?.clip.kind === 'text') {
+        updateClip(found.clip.id, {
+          text: {
+            size: style.size,
+            weight: style.weight,
+            color: style.color,
+            background: style.background,
+            shadow: style.shadow,
+          },
+        });
+        toast(`Estilo “${style.label}” aplicado al subtítulo`, 'success', 1600);
+      }
+      render();
+      return;
+    }
+
+    const captionSelect = event.target.closest('[data-caption-select]');
+    if (captionSelect) {
+      selectClip(captionSelect.dataset.captionSelect);
+      return;
+    }
+
+    const avatarPreset = event.target.closest('[data-avatar]');
+    if (avatarPreset) {
+      const preset = AVATAR_PRESETS.find((item) => item.id === avatarPreset.dataset.avatar);
+      if (!preset) return;
+      addStickerClip(preset.emoji, {
+        start: state.playhead,
+        duration: 5,
+        x: -28,
+        y: 24,
+        scale: 1,
+        preset: { size: 190, background: preset.color, shape: 'circle' },
+      });
+      toast(`Avatar “${preset.name}” añadido`, 'success', 1600);
+      return;
+    }
+
+    const filterButton = event.target.closest('[data-filter]');
+    if (filterButton) { applyFilter(filterButton.dataset.filter); return; }
+
+    const transitionButton = event.target.closest('[data-transition]');
+    if (transitionButton) { applyTransition(transitionButton.dataset.transition); return; }
+
+    const templateButton = event.target.closest('[data-template]');
+    if (templateButton) {
+      const template = TEMPLATES.find((item) => item.id === templateButton.dataset.template);
+      if (template) void applyTemplate(template);
+      return;
+    }
+
+    const subtitle = event.target.closest('[data-add-subtitle]');
+    if (subtitle) {
+      const style = CAPTION_STYLES.find((item) => item.id === captionStyle) || CAPTION_STYLES[0];
+      addTextClip('Escribe tu subtítulo', {
+        start: state.playhead,
+        duration: 3,
+        preset: {
+          size: style.size,
+          weight: style.weight,
+          color: style.color,
+          background: style.background,
+          shadow: style.shadow,
+        },
+      });
+      setPanel('text');
+      return;
+    }
+
+    const srt = event.target.closest('[data-import-srt]');
+    if (srt) { pickFiles('srt', '.srt,text/plain', false); return; }
+
+    const avatar = event.target.closest('[data-avatar-upload]');
+    if (avatar) { pickFiles('avatar', 'image/*', false); return; }
+
+    const reset = event.target.closest('[data-reset-clip]');
+    if (reset) {
+      const found = selectedClip();
+      if (!found) return;
+      updateClip(found.clip.id, {
+        filter: 'none',
+        effect: 'none',
+        transition: 'none',
+        transitionDuration: 0.6,
+        adjust: { brightness: 100, contrast: 100, saturate: 100 },
+        opacity: 1,
+        scale: 1,
+        rotate: 0,
+        x: 0,
+        y: 0,
+        volume: 1,
+        speed: 1,
+        fadeIn: 0,
+        fadeOut: 0,
+      });
+      return;
+    }
+
+    const card = event.target.closest('[data-media-id]');
+    if (card) {
+      const media = state.media.get(card.dataset.mediaId);
+      if (!media) return;
+      const clip = addMediaToTimeline(media.id, { start: state.playhead });
+      if (clip) toast(`${media.kind === 'audio' ? 'Audio' : media.kind === 'image' ? 'Imagen' : 'Video'} añadido a la línea de tiempo`, 'success', 1600);
+    }
+  });
+
+  body.addEventListener('input', (event) => {
+    const target = event.target;
+    if (target.matches('[data-filter-search]')) {
+      filterSearch = target.value;
+      debouncedCatalogRender('[data-filter-search]');
+      return;
+    }
+    if (target.matches('[data-effect-search]')) {
+      effectSearch = target.value;
+      debouncedCatalogRender('[data-effect-search]');
+      return;
+    }
+    if (target.matches('[data-sticker-search]')) {
+      stickerSearch = target.value;
+      debouncedCatalogRender('[data-sticker-search]');
+      return;
+    }
+    if (target.matches('[data-adjust-search]')) {
+      adjustSearch = target.value;
+      debouncedCatalogRender('[data-adjust-search]');
+      return;
+    }
+    if (target.matches('[data-media-search]')) {
+      searchQuery = target.value;
+      const query = searchQuery.trim().toLowerCase();
+      for (const card of body.querySelectorAll('[data-media-id]')) {
+        card.style.display = !query || (card.dataset.name || '').includes(query) ? '' : 'none';
+      }
+      return;
+    }
+    if (target.matches('[data-adjust-key]')) {
+      const found = selectedClip();
+      if (!found) return;
+      const key = target.dataset.adjustKey;
+      const factor = Number(target.dataset.factor || 1);
+      const value = Number(target.value) * factor;
+      suppressRender = true;
+      if (key.startsWith('adjust.')) {
+        updateClip(found.clip.id, { adjust: { [key.slice(7)]: value } }, { history: false });
+      } else {
+        updateClip(found.clip.id, { [key]: value }, { history: false });
+      }
+      suppressRender = false;
+      for (const readout of body.querySelectorAll('[data-adj-readout]')) {
+        if (readout.dataset.adjReadout === key) readout.textContent = adjustReadout(key, value);
+      }
+      return;
+    }
+    if (target.matches('[data-tts-rate]')) {
+      ttsRate = Number(target.value) || 1;
+      const readout = body.querySelector('[data-tts-rate-readout]');
+      if (readout) readout.textContent = `${ttsRate.toFixed(2)}×`;
+      return;
+    }
+    if (target.matches('[data-tts-pitch]')) {
+      ttsPitch = Number(target.value) || 1;
+      const readout = body.querySelector('[data-tts-pitch-readout]');
+      if (readout) readout.textContent = ttsPitch.toFixed(2);
+    }
+  });
+
+  body.addEventListener('change', (event) => {
+    if (event.target.matches('[data-tts-voice]')) {
+      ttsVoice = event.target.value;
+    }
+  });
+
+  body.addEventListener('dragstart', (event) => {
+    const card = event.target.closest('[data-media-id]');
+    if (!card) return;
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('application/x-cacup-media', card.dataset.mediaId);
+    event.dataTransfer.setData('text/plain', card.dataset.mediaId);
+  });
+
+  body.addEventListener('dragover', (event) => {
+    if (!['media', 'audio', 'avatar'].includes(state.panel)) return;
+    if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+    event.preventDefault();
+    body.querySelector('.media-drop')?.classList.add('drag');
+  });
+
+  body.addEventListener('dragleave', (event) => {
+    if (event.relatedTarget && body.contains(event.relatedTarget)) return;
+    body.querySelector('.media-drop')?.classList.remove('drag');
+  });
+
+  body.addEventListener('drop', async (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+    event.preventDefault();
+    body.querySelector('.media-drop')?.classList.remove('drag');
+    await importFiles(event.dataTransfer.files);
+  });
+
+  fileInput.addEventListener('change', async () => {
+    const files = Array.from(fileInput.files || []);
+    fileInput.value = '';
+    if (!files.length) return;
+    if (fileMode === 'srt') await importSrt(files[0]);
+    else if (fileMode === 'avatar') {
+      await importFiles(files);
+      setPanel('media');
+    } else {
+      await importFiles(files);
+    }
+  });
+
+  subscriptions.push(on('panel', () => {
+    if (railView === 'timeline' || railView === 'secondary') railView = 'media';
+    render();
+  }));
+  subscriptions.push(on('project', render));
+  subscriptions.push(on('selection', render));
+  subscriptions.push(on('importing', render));
+
+  render();
+
+  return {
+    element: host,
+    destroy() {
+      subscriptions.forEach((off) => off());
+      speech?.removeEventListener?.('voiceschanged', onVoicesChanged);
+      speech?.cancel();
+    },
+  };
+}
+function detailRange(label, prop, inputValue, min, max, step, factor, readout, unit = '') {
+  return `
+    <div class="prop">
+      <span class="tx-lbl">${label}</span>
+      <input type="range" data-prop="${prop}" data-factor="${factor}" data-unit="${unit}" min="${min}" max="${max}" step="${step}" value="${inputValue}" />
+      <b class="tx-val" data-readout="${prop}">${readout}${unit}</b>
+    </div>`;
+}
+
+function numberField(label, prop, value, min, max, step = 1) {
+  return `
+    <div>
+      <span class="muted" style="font-size:9.5px;display:block;margin-bottom:4px">${label}</span>
+      <input class="input" type="number" data-prop-number="${prop}" min="${min}" max="${max}" step="${step}" value="${Math.round(value * 100) / 100}" />
+    </div>`;
+}
+
+function colorValue(color) {
+  return /^#[0-9a-fA-F]{6}$/.test(color || '') ? color : '#ffffff';
+}
+
+function rgbaColor(color, alpha = 1) {
+  const match = String(color || '').match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  if (!match) return color || 'transparent';
+  return `rgba(${parseInt(match[1], 16)}, ${parseInt(match[2], 16)}, ${parseInt(match[3], 16)}, ${Math.max(0, Math.min(1, alpha))})`;
+}
+
+function textRangeField(label, key, value, min, max, step, factor, target = 'text', unit = '') {
+  const numeric = Number(value);
+  const safe = Number.isFinite(numeric) ? numeric : 0;
+  const inputValue = Math.round((safe / factor) * 1000) / 1000;
+  const display = factor === 0.01 ? `${Math.round(safe * 100)}${unit || '%'}` : `${Math.round(safe * 100) / 100}${unit}`;
+  return `
+    <div class="prop tx-prop">
+      <span class="tx-lbl">${label}</span>
+      <input type="range" data-text-range="${key}" data-text-factor="${factor}" data-text-target="${target}" data-text-unit="${unit}" min="${min}" max="${max}" step="${step}" value="${inputValue}" />
+      <b class="tx-val" data-tx-readout="${key}">${display}</b>
+    </div>`;
+}
+
+function textColorField(label, key, color) {
+  return `
+    <div class="tx-color-field">
+      <span>${label}</span>
+      <input class="input" type="color" data-text-paint="${key}" value="${colorValue(color)}" />
+    </div>`;
+}
+
+export function mountDetailsPanel(host) {
+  host.classList.add('panel', 'details-panel');
+  host.innerHTML = `
+    <div class="details-head">
+      <span class="details-title">Detalles</span>
+    </div>
+    <div class="details-scroll" data-details></div>
+    <div class="details-foot" data-details-foot></div>`;
+  const details = host.querySelector('[data-details]');
+  const foot = host.querySelector('[data-details-foot]');
+  const subscriptions = [];
+  let suppressRender = false;
+
+  const ratioLabel = (ratio) => (ratio === '16:9' ? 'Original' : ratio);
+
+  function projectMarkup() {
+    const project = state.project;
+    return `
+      <div class="detail-list project-detail-list">
+        <div class="detail-item"><span class="d-label">Nombre:</span><span class="d-value strong" title="${escapeHtml(project.name)}">${escapeHtml(project.name)}</span></div>
+        <div class="detail-item"><span class="d-label">Ruta:</span><span class="d-value path" title="Cacup / Proyectos / ${escapeHtml(project.name)}">Cacup / Proyectos / ${escapeHtml(project.name)}</span></div>
+        <div class="detail-item"><span class="d-label">Archivos multimedia importados:</span><span class="d-value">Mantener en la ubicación original</span></div>
+        <div class="detail-item"><span class="d-label">Disposición de capas: <i class="d-info" title="Las capas se apilan en el orden de las pistas">${icon('info', 11)}</i></span><span class="d-value">Activado</span></div>
+        <div class="detail-item"><span class="d-label">Proxy: <i class="d-info" title="Los archivos proxy agilizan la reproducción de videos pesados">${icon('info', 11)}</i></span><span class="d-value">Desactivado</span></div>
+      </div>
+      <div class="details-sep"></div>
+      <div class="detail-list">
+        <div class="detail-item"><span class="d-label">Relación de aspecto:</span><span class="d-value">${ratioLabel(project.ratio)}</span></div>
+        <div class="detail-item"><span class="d-label">Resolución:</span><span class="d-value">${escapeHtml(project.resolution || 'Adaptado')}</span></div>
+        <div class="detail-item"><span class="d-label">Cuadros por segundo:</span><span class="d-value">${(project.fps || 30).toFixed(2)} fps</span></div>
+      </div>`;
+  }
+
+  function openProjectEditor() {
+    if (!state.project) return;
+    const project = state.project;
+    openModal({
+      title: 'Modificar proyecto',
+      width: 470,
+      body: `
+        <div class="field"><label>Nombre</label><input class="input" data-edit-name value="${escapeHtml(project.name)}" maxlength="80" /></div>
+        <div class="field-row">
+          <div class="field"><label>Relación de aspecto</label>
+            <select class="input" data-edit-ratio>
+              ${['16:9', '9:16', '1:1', '4:3', '21:9', '4:5'].map((ratio) => `<option ${ratio === project.ratio ? 'selected' : ''}>${ratio}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>Resolución</label>
+            <select class="input" data-edit-resolution>
+              ${['480p', '720p', '1080p', '4K'].map((key) => `<option ${key === project.resolution ? 'selected' : ''}>${key}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="field"><label>Cuadros por segundo</label>
+          <select class="input" data-edit-fps>
+            ${[24, 30, 60].map((fps) => `<option value="${fps}" ${fps === project.fps ? 'selected' : ''}>${fps} fps</option>`).join('')}
+          </select>
+        </div>`,
+      footer: `<button class="btn" data-edit-cancel>Cancelar</button><button class="btn btn-primary" data-edit-save>Guardar</button>`,
+      onMount(modal) {
+        modal.foot.querySelector('[data-edit-cancel]').addEventListener('click', modal.close);
+        modal.foot.querySelector('[data-edit-save]').addEventListener('click', () => {
+          const name = modal.body.querySelector('[data-edit-name]').value.trim();
+          const ratio = modal.body.querySelector('[data-edit-ratio]').value;
+          const resolution = modal.body.querySelector('[data-edit-resolution]').value;
+          const fps = Number(modal.body.querySelector('[data-edit-fps]').value);
+          updateProject({
+            ...(name ? { name } : {}),
+            ratio,
+            resolution,
+            fps,
+          });
+          modal.close();
+        });
+      },
+    });
+  }
+
+  function clipMarkup(found) {
+    const { clip } = found;
+    const media = clip.mediaId ? state.media.get(clip.mediaId) : null;
+    const isText = clip.kind === 'text';
+    const isSticker = clip.kind === 'sticker';
+    const isVisual = clip.kind === 'video' || clip.kind === 'image';
+    const isAudio = clip.kind === 'audio';
+    const kindLabel = { video: 'Video', image: 'Imagen', audio: 'Audio', text: 'Texto', sticker: 'Sticker' }[clip.kind] || 'Clip';
+    const thumb = media?.thumb
+      ? `<div class="details-thumb"><img src="${media.thumb}" alt="" /></div>`
+      : isText
+        ? `<div class="details-thumb text-thumb">${escapeHtml((clip.text?.content || '').slice(0, 90))}</div>`
+        : isSticker
+          ? `<div class="details-thumb text-thumb sticker-thumb">${escapeHtml(clip.sticker?.content || clip.name || '✨')}</div>`
+          : `<div class="details-thumb icon-thumb">${icon(isAudio ? 'music' : 'film', 26)}</div>`;
+
+    return `
+      <div class="clip-details-head"><i class="details-dot"></i><span>${escapeHtml(clip.name || kindLabel)}</span><span class="clip-chip">${kindLabel}</span></div>
+      ${thumb}
+      <div class="detail-list compact">
+        <div class="detail-item"><span class="d-label">Inicio:</span><span class="d-value">${formatTime(clip.start)}</span></div>
+        <div class="detail-item"><span class="d-label">Duración:</span><span class="d-value">${formatTime(clip.duration)}</span></div>
+        ${media ? `<div class="detail-item"><span class="d-label">Archivo:</span><span class="d-value path" title="${escapeHtml(media.name)}">${escapeHtml(media.name)}</span></div>` : ''}
+      </div>
+      <div class="details-sep"></div>
+      ${isText ? textControls(clip) : ''}
+      ${isSticker ? stickerControls(clip) : ''}
+      ${isVisual ? `
+        <div class="details-section">Color</div>
+        <div class="field">
+          <label>Filtro</label>
+          <select class="input" data-clip-filter>
+            ${Object.entries(FILTERS).map(([key, value]) => `<option value="${key}" ${key === clip.filter ? 'selected' : ''}>${value.label}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Efecto</label>
+          <select class="input" data-clip-effect>
+            ${Object.entries(EFFECTS).map(([key, value]) => `<option value="${key}" ${key === (clip.effect || 'none') ? 'selected' : ''}>${value.label}</option>`).join('')}
+          </select>
+        </div>
+        ${detailRange('Brillo', 'adjust.brightness', Math.round(clip.adjust?.brightness ?? 100), 0, 200, 1, 1, Math.round(clip.adjust?.brightness ?? 100), '%')}
+        ${detailRange('Contraste', 'adjust.contrast', Math.round(clip.adjust?.contrast ?? 100), 0, 200, 1, 1, Math.round(clip.adjust?.contrast ?? 100), '%')}
+        ${detailRange('Saturación', 'adjust.saturate', Math.round(clip.adjust?.saturate ?? 100), 0, 300, 1, 1, Math.round(clip.adjust?.saturate ?? 100), '%')}
+        ${detailRange('Grises', 'adjust.grayscale', Math.round(clip.adjust?.grayscale ?? 0), 0, 100, 1, 1, Math.round(clip.adjust?.grayscale ?? 0), '%')}
+        ${detailRange('Sepia', 'adjust.sepia', Math.round(clip.adjust?.sepia ?? 0), 0, 100, 1, 1, Math.round(clip.adjust?.sepia ?? 0), '%')}
+        ${detailRange('Tono', 'adjust.hue', Math.round(clip.adjust?.hue ?? 0), -180, 180, 1, 1, Math.round(clip.adjust?.hue ?? 0), '°')}
+      ` : ''}
+      ${!isText ? `
+      <div class="details-section">Transformación</div>
+      ${detailRange('Escala', 'scale', Math.round((clip.scale ?? 1) * 100), 10, 400, 1, 0.01, Math.round((clip.scale ?? 1) * 100), '%')}
+      ${detailRange('Rotación', 'rotate', Math.round(clip.rotate || 0), -180, 180, 1, 1, Math.round(clip.rotate || 0), '°')}
+      ${detailRange('Opacidad', 'opacity', Math.round((clip.opacity ?? 1) * 100), 0, 100, 1, 0.01, Math.round((clip.opacity ?? 1) * 100), '%')}
+      <div class="prop">
+        <span class="tx-lbl">Posición</span>
+        <div class="prop-grid">
+          ${numberField('X', 'x', clip.x || 0, -100, 100, 1)}
+          ${numberField('Y', 'y', clip.y || 0, -100, 100, 1)}
+        </div>
+      </div>` : ''}
+      ${clip.kind === 'video' || isAudio ? `
+        <div class="details-section">Audio</div>
+        ${detailRange('Volumen', 'volume', Math.round((clip.volume ?? 1) * 100), 0, 100, 1, 0.01, Math.round((clip.volume ?? 1) * 100), '%')}
+        ${detailRange('Velocidad', 'speed', Math.round((clip.speed ?? 1) * 100), 25, 300, 5, 0.01, (clip.speed ?? 1).toFixed(2), '×')}
+      ` : ''}
+      <div class="details-section">Entrada y transición</div>
+      <div class="field">
+        <label>Transición al inicio</label>
+        <select class="input" data-clip-transition>
+          ${TRANSITIONS.map((item) => `<option value="${item.id}" ${item.id === (clip.transition || 'none') ? 'selected' : ''}>${item.label}</option>`).join('')}
+        </select>
+      </div>
+      ${(clip.transition && clip.transition !== 'none') ? numberField('Duración de transición (s)', 'transitionDuration', clip.transitionDuration || 0.6, 0.1, 3, 0.1) : ''}
+      <div class="details-section">Fundidos</div>
+      <div class="prop">
+        <div class="prop-grid">
+          ${numberField('Entrada (s)', 'fadeIn', clip.fadeIn || 0, 0, 10, 0.1)}
+          ${numberField('Salida (s)', 'fadeOut', clip.fadeOut || 0, 0, 10, 0.1)}
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-block" data-reset-clip>${icon('rotate', 14)} Restablecer ajustes</button>`;
+  }
+
+  function textControls(clip) {
+    const text = { ...TEXT_DEFAULTS, ...(clip.text || {}) };
+    const hasBackground = text.background && text.background !== 'transparent';
+    const styleSwatches = `
+      <button class="tx-style-swatch tx-style-none" data-text-style-clear title="Sin estilo (restablecer color, trazo y fondo)">⊘</button>
+      ${TEXT_STYLES.map((style) => {
+        const patch = style.patch || {};
+        const background = patch.background && patch.background !== 'transparent'
+          ? `background:${patch.background};border-radius:4px;`
+          : '';
+        const font = patch.font ? `font-family:'${patch.font}',sans-serif;` : '';
+        const glow = patch.glow ? `text-shadow:0 0 6px ${patch.glowColor || '#00e5d0'};` : '';
+        return `<button class="tx-style-swatch" data-text-style-apply="${style.id}" title="${escapeHtml(style.label)}" style="color:${patch.color || '#ffffff'};font-weight:${patch.weight || 700};${font}${background}${glow}">Aa</button>`;
+      }).join('')}`;
+    const animationOptions = TEXT_ANIMATION_GROUPS.map((group) => `
+      <optgroup label="${group.label}">
+        ${group.items.map((item) => `<option value="${item.id}" ${text.animation === item.id ? 'selected' : ''}>${escapeHtml(group.label)} · ${escapeHtml(item.label)}</option>`).join('')}
+      </optgroup>`).join('');
+    return `
+      <div class="details-section">Texto</div>
+      <div class="field">
+        <label>Contenido</label>
+        <textarea class="input" data-text-content rows="3" maxlength="400">${escapeHtml(text.content || '')}</textarea>
+      </div>
+
+      <details class="tx-group" open>
+        <summary>Fuente</summary>
+        <div class="field">
+          <label>Fuente</label>
+          <select class="input" data-text-select="font">
+            ${TEXT_FONTS.map((font) => `<option value="${escapeHtml(font.value)}" ${text.font === font.value ? 'selected' : ''}>${escapeHtml(font.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Tamaño de la fuente</label>
+            <input class="input" type="number" data-text-number="size" min="8" max="400" step="1" value="${Math.round(text.size || 72)}" />
+          </div>
+          <div class="field">
+            <label>Grosor</label>
+            <select class="input" data-text-select="weight">
+              ${TEXT_WEIGHTS.map((weight) => `<option value="${weight.value}" ${Number(text.weight) === weight.value ? 'selected' : ''}>${weight.label}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+      </details>
+
+      <details class="tx-group" open>
+        <summary>Diseño</summary>
+        <div class="tx-chip-row">
+          <button class="tx-chip tx-solid${text.bold ? ' active' : ''}" data-text-toggle="bold" title="Negrita">B</button>
+          <button class="tx-chip tx-italic${text.italic ? ' active' : ''}" data-text-toggle="italic" title="Cursiva">I</button>
+          <button class="tx-chip tx-underline${text.underline ? ' active' : ''}" data-text-toggle="underline" title="Subrayado">U</button>
+        </div>
+      </details>
+
+      <details class="tx-group" open>
+        <summary>May./mín.</summary>
+        <div class="tx-chip-row">
+          ${TEXT_CASES.map((item) => `<button class="tx-chip${text.textCase === item.value ? ' active' : ''}" data-text-case="${item.value}" title="${item.title}">${item.label}</button>`).join('')}
+        </div>
+      </details>
+
+      <details class="tx-group" open>
+        <summary>Color</summary>
+        <div class="tx-color-inline">
+          <input class="input" type="color" data-text-color value="${colorValue(text.color)}" />
+          <span>Color del texto</span>
+          <b>${escapeHtml(colorValue(text.color))}</b>
+        </div>
+      </details>
+
+      <details class="tx-group" open>
+        <summary>Carácter y línea</summary>
+        ${textRangeField('Carácter', 'letterSpacing', text.letterSpacing, -20, 60, 1, 0.01)}
+        ${textRangeField('Línea', 'lineSpacing', text.lineSpacing, 70, 220, 1, 0.01)}
+      </details>
+
+      <details class="tx-group" open>
+        <summary>Alineación</summary>
+        <div class="tx-chip-row">
+          ${TEXT_ALIGNS.map((item) => `<button class="tx-chip${text.align === item.value ? ' active' : ''}" data-text-align="${item.value}" title="${item.label}">${item.label}</button>`).join('')}
+        </div>
+      </details>
+
+      <details class="tx-group" open>
+        <summary>Estilo preestablecido</summary>
+        <div class="tx-style-grid">${styleSwatches}</div>
+      </details>
+
+      <details class="tx-group" open>
+        <summary>Transformación</summary>
+        ${textRangeField('Escala', 'scale', clip.scale ?? 1, 10, 400, 1, 0.01, 'clip')}
+        <div class="tx-switch-row"><span>Escala uniforme</span><button class="switch on" disabled title="Cacup mantiene la escala uniforme para el texto"></button></div>
+        ${textRangeField('Posición X', 'x', clip.x || 0, -100, 100, 1, 1, 'clip', '%')}
+        ${textRangeField('Posición Y', 'y', clip.y || 0, -100, 100, 1, 1, 'clip', '%')}
+        ${textRangeField('Rotación del plano', 'rotate', clip.rotate || 0, -180, 180, 1, 1, 'clip', '°')}
+        <div class="tx-chip-row">
+          <button class="tx-chip${text.flipX ? ' active' : ''}" data-text-toggle="flipX">⇋ Voltear horizontal</button>
+          <button class="tx-chip${text.flipY ? ' active' : ''}" data-text-toggle="flipY">⇵ Voltear vertical</button>
+        </div>
+      </details>
+
+      <details class="tx-group" open>
+        <summary>Mezcla</summary>
+        ${textRangeField('Opacidad', 'opacity', text.opacity, 0, 100, 1, 0.01)}
+      </details>
+
+      <details class="tx-group">
+        <summary>Trazo</summary>
+        ${textColorField('Color', 'strokeColor', text.strokeColor)}
+        ${textRangeField('Grosor', 'strokeWidth', text.strokeWidth, 0, 25, 1, 0.01)}
+        <div class="field">
+          <label>Posición</label>
+          <select class="input" data-text-select="strokeMode">
+            <option value="outer" ${text.strokeMode === 'outer' ? 'selected' : ''}>Fuera</option>
+            <option value="center" ${text.strokeMode === 'center' ? 'selected' : ''}>Centro</option>
+            <option value="inside" ${text.strokeMode === 'inside' ? 'selected' : ''}>Dentro</option>
+          </select>
+        </div>
+      </details>
+
+      <details class="tx-group">
+        <summary>Fondo</summary>
+        <div class="inline-field">
+          <input class="input" type="color" data-text-paint="background" value="${hasBackground ? colorValue(text.background) : '#000000'}" />
+          <button class="btn btn-small" data-text-bg-clear>${hasBackground ? 'Quitar fondo' : 'Transparente'}</button>
+        </div>
+        ${textRangeField('Opacidad', 'backgroundAlpha', text.backgroundAlpha, 0, 100, 1, 0.01)}
+        ${textRangeField('Radio', 'backgroundRadius', text.backgroundRadius, 0, 50, 1, 0.01)}
+        ${textRangeField('Margen', 'backgroundPadding', text.backgroundPadding, 0, 60, 1, 0.01)}
+        <div class="field">
+          <label>Estilo</label>
+          <select class="input" data-text-select="backgroundStyle">
+            <option value="rounded" ${text.backgroundStyle === 'rounded' ? 'selected' : ''}>Redondeado</option>
+            <option value="square" ${text.backgroundStyle === 'square' ? 'selected' : ''}>Recto</option>
+            <option value="pill" ${text.backgroundStyle === 'pill' ? 'selected' : ''}>Píldora</option>
+          </select>
+        </div>
+        ${textColorField('Borde', 'backgroundBorderColor', text.backgroundBorderColor)}
+        ${textRangeField('Grosor del borde', 'backgroundBorderWidth', text.backgroundBorderWidth, 0, 5, 1, 0.01)}
+      </details>
+
+      <details class="tx-group">
+        <summary>Brillo</summary>
+        <div class="tx-switch-row"><span>Resplandor</span><button class="switch ${text.glow ? 'on' : ''}" data-text-toggle="glow" aria-label="Resplandor de texto"></button></div>
+        ${textColorField('Color', 'glowColor', text.glowColor)}
+        ${textRangeField('Intensidad', 'glowBlur', text.glowBlur, 0, 120, 1, 0.01)}
+      </details>
+
+      <details class="tx-group">
+        <summary>Sombra</summary>
+        <div class="tx-switch-row"><span>Sombra</span><button class="switch ${text.shadow !== false ? 'on' : ''}" data-text-toggle="shadow" aria-label="Sombra de texto"></button></div>
+        ${textColorField('Color', 'shadowColor', text.shadowColor)}
+        ${textRangeField('Distancia', 'shadowDistance', text.shadowDistance, 0, 30, 1, 0.01)}
+        ${textRangeField('Ángulo', 'shadowAngle', text.shadowAngle, -180, 180, 1, 1, 'text', '°')}
+        ${textRangeField('Desenfoque', 'shadowBlur', text.shadowBlur, 0, 80, 1, 0.01)}
+        ${textRangeField('Opacidad', 'shadowAlpha', text.shadowAlpha, 0, 100, 1, 0.01)}
+      </details>
+
+      <details class="tx-group">
+        <summary>Curva</summary>
+        ${textRangeField('Curva', 'curve', text.curve, -100, 100, 1, 1)}
+        <div class="tx-note">Valores positivos curvan el texto hacia arriba; negativos, hacia abajo.</div>
+      </details>
+
+      <details class="tx-group" open>
+        <summary>Animación</summary>
+        <div class="field">
+          <label>Animación del texto</label>
+          <select class="input" data-text-animation-select>
+            <option value="none" ${text.animation === 'none' ? 'selected' : ''}>Sin animación</option>
+            ${animationOptions}
+          </select>
+        </div>
+        ${textRangeField('Duración', 'animationDuration', text.animationDuration, 0.1, 3, 0.05, 1, 'text', 's')}
+      </details>
+
+      <button class="btn btn-ghost btn-block" data-text-reset>${icon('rotate', 14)} Restablecer estilo de texto</button>
+      <div class="details-sep"></div>`;
+  }
+
+  function stickerControls(clip) {
+    const sticker = clip.sticker || {};
+    const hasBackground = sticker.background && sticker.background !== 'transparent';
+    return `
+      <div class="details-section">Sticker</div>
+      <div class="field">
+        <label>Contenido</label>
+        <input class="input" data-sticker-content maxlength="16" value="${escapeHtml(sticker.content || '')}" />
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Tamaño base</label>
+          <input class="input" type="number" data-sticker-number="size" min="24" max="700" step="1" value="${Math.round(sticker.size || 220)}" />
+        </div>
+        <div class="field">
+          <label>Forma del fondo</label>
+          <select class="input" data-sticker-select="shape">
+            <option value="none" ${(sticker.shape || 'none') === 'none' ? 'selected' : ''}>Sin fondo</option>
+            <option value="circle" ${sticker.shape === 'circle' ? 'selected' : ''}>Círculo</option>
+            <option value="square" ${sticker.shape === 'square' ? 'selected' : ''}>Cuadrado redondeado</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Color de fondo</label>
+        <div class="inline-field">
+          <input class="input" type="color" data-sticker-color value="${hasBackground ? colorValue(sticker.background) : '#1d6d78'}" />
+          <button class="btn btn-small" data-sticker-bg-clear>${hasBackground ? 'Quitar fondo' : 'Sin fondo'}</button>
+        </div>
+      </div>
+      <div class="details-sep"></div>`;
+  }
+
+  function renderFoot() {
+    if (state.selection) {
+      foot.innerHTML = `
+        <div class="details-foot-row">
+          <button class="btn btn-ghost" data-clip-duplicate>${icon('copy', 14)} Duplicar</button>
+          <button class="btn btn-ghost danger" data-clip-delete>${icon('trash', 14)} Eliminar</button>
+        </div>`;
+      return;
+    }
+    foot.innerHTML = `<button class="modify-btn" data-edit-project>Modificar</button>`;
+  }
+
+  function render() {
+    if (suppressRender) return;
+    const scrollTop = details.scrollTop;
+    const found = selectedClip();
+    details.innerHTML = found ? clipMarkup(found) : projectMarkup();
+    renderFoot();
+    details.scrollTop = scrollTop;
+  }
+
+  function applyRange(input) {
+    const found = selectedClip();
+    if (!found) return;
+    const key = input.dataset.prop;
+    const factor = Number(input.dataset.factor || 1);
+    const value = Number(input.value) * factor;
+    suppressRender = true;
+    if (key.startsWith('adjust.')) {
+      updateClip(found.clip.id, { adjust: { [key.slice(7)]: value } }, { history: false });
+    } else {
+      updateClip(found.clip.id, { [key]: value }, { history: false });
+    }
+    suppressRender = false;
+    const readout = details.querySelector(`[data-readout="${key}"]`);
+    if (readout) {
+      const unit = input.dataset.unit || (key === 'rotate' ? '°' : key === 'speed' ? '×' : '%');
+      const display = key === 'speed'
+        ? Number(value).toFixed(2)
+        : factor === 1
+          ? Math.round(value)
+          : Math.round(value * 100);
+      readout.textContent = `${display}${unit}`;
+    }
+  }
+
+  host.addEventListener('click', (event) => {
+    if (event.target.closest('[data-edit-project]')) { openProjectEditor(); return; }
+    if (event.target.closest('[data-clip-delete]')) { deleteSelected(); return; }
+    if (event.target.closest('[data-clip-duplicate]')) { duplicateSelected(); return; }
+    if (event.target.closest('[data-export-video]')) { openExportDialog(); return; }
+    if (event.target.closest('[data-details-help]')) { openShortcutsDialog(); return; }
+    const toggle = event.target.closest('[data-text-toggle]');
+    if (toggle) {
+      const found = selectedClip();
+      if (!found) return;
+      const field = toggle.dataset.textToggle;
+      const current = field === 'shadow' ? found.clip.text?.shadow !== false : !!found.clip.text?.[field];
+      updateClip(found.clip.id, { text: { [field]: !current } });
+      return;
+    }
+    const alignButton = event.target.closest('[data-text-align]');
+    if (alignButton) {
+      const found = selectedClip();
+      if (!found) return;
+      updateClip(found.clip.id, { text: { align: alignButton.dataset.textAlign } });
+      return;
+    }
+    const caseButton = event.target.closest('[data-text-case]');
+    if (caseButton) {
+      const found = selectedClip();
+      if (!found) return;
+      updateClip(found.clip.id, { text: { textCase: caseButton.dataset.textCase } });
+      return;
+    }
+    const styleApply = event.target.closest('[data-text-style-apply]');
+    if (styleApply) {
+      const found = selectedClip();
+      const style = TEXT_STYLES.find((item) => item.id === styleApply.dataset.textStyleApply);
+      if (!found || !style) return;
+      updateClip(found.clip.id, { text: style.patch });
+      toast(`Estilo “${style.label}” aplicado`, 'success', 1500);
+      return;
+    }
+    if (event.target.closest('[data-text-style-clear]')) {
+      const found = selectedClip();
+      if (!found) return;
+      updateClip(found.clip.id, {
+        text: {
+          ...TEXT_DEFAULTS,
+          content: found.clip.text?.content || '',
+        },
+      });
+      toast('Estilo de texto restablecido', 'info', 1500);
+      return;
+    }
+    if (event.target.closest('[data-text-reset]')) {
+      const found = selectedClip();
+      if (!found) return;
+      updateClip(found.clip.id, {
+        text: {
+          ...TEXT_DEFAULTS,
+          content: found.clip.text?.content || '',
+        },
+      });
+      toast('Estilo de texto restablecido', 'info', 1600);
+      return;
+    }
+    if (event.target.closest('[data-reset-clip]')) {
+      const found = selectedClip();
+      if (!found) return;
+      updateClip(found.clip.id, {
+        filter: 'none',
+        effect: 'none',
+        transition: 'none',
+        transitionDuration: 0.6,
+        adjust: { brightness: 100, contrast: 100, saturate: 100 },
+        opacity: 1,
+        scale: 1,
+        rotate: 0,
+        x: 0,
+        y: 0,
+        volume: 1,
+        speed: 1,
+        fadeIn: 0,
+        fadeOut: 0,
+      });
+      return;
+    }
+    if (event.target.closest('[data-text-bg-clear]')) {
+      const found = selectedClip();
+      if (!found) return;
+      updateClip(found.clip.id, { text: { background: 'transparent' } });
+      return;
+    }
+    if (event.target.closest('[data-sticker-bg-clear]')) {
+      const found = selectedClip();
+      if (!found) return;
+      updateClip(found.clip.id, { sticker: { background: 'transparent' } });
+      return;
+    }
+  });
+
+  details.addEventListener('input', (event) => {
+    const target = event.target;
+    if (target.matches('[data-text-content]')) {
+      const found = selectedClip();
+      if (!found) return;
+      suppressRender = true;
+      updateClip(found.clip.id, {
+        name: target.value.trim().slice(0, 24) || 'Texto',
+        text: { content: target.value },
+      }, { history: false });
+      suppressRender = false;
+      return;
+    }
+    if (target.matches('[data-text-color]')) {
+      const found = selectedClip();
+      if (!found) return;
+      suppressRender = true;
+      updateClip(found.clip.id, { text: { color: target.value } }, { history: false });
+      suppressRender = false;
+      const readout = details.querySelector('.tx-color-inline b');
+      if (readout) readout.textContent = target.value;
+      return;
+    }
+    if (target.matches('[data-text-paint]')) {
+      const found = selectedClip();
+      if (!found) return;
+      const key = target.dataset.textPaint;
+      suppressRender = true;
+      updateClip(found.clip.id, { text: { [key]: target.value } }, { history: false });
+      suppressRender = false;
+      return;
+    }
+    if (target.matches('[data-text-range]')) {
+      const found = selectedClip();
+      if (!found) return;
+      const key = target.dataset.textRange;
+      const factor = Number(target.dataset.textFactor || 1);
+      const value = Number(target.value) * factor;
+      suppressRender = true;
+      if (target.dataset.textTarget === 'clip') {
+        updateClip(found.clip.id, { [key]: value }, { history: false });
+      } else {
+        updateClip(found.clip.id, { text: { [key]: value } }, { history: false });
+      }
+      suppressRender = false;
+      const unit = target.dataset.textUnit || '';
+      const readout = details.querySelector(`[data-tx-readout="${key}"]`);
+      if (readout) {
+        readout.textContent = factor === 0.01
+          ? `${Math.round(value * 100)}${unit || '%'}`
+          : `${Math.round(value * 100) / 100}${unit}`;
+      }
+      return;
+    }
+    if (target.matches('[data-text-background]')) {
+      const found = selectedClip();
+      if (!found) return;
+      suppressRender = true;
+      updateClip(found.clip.id, { text: { background: target.value } }, { history: false });
+      suppressRender = false;
+      return;
+    }
+    if (target.matches('[data-sticker-content]')) {
+      const found = selectedClip();
+      if (!found) return;
+      suppressRender = true;
+      updateClip(found.clip.id, {
+        name: target.value.trim() || 'Sticker',
+        sticker: { content: target.value },
+      }, { history: false });
+      suppressRender = false;
+      return;
+    }
+    if (target.matches('[data-sticker-color]')) {
+      const found = selectedClip();
+      if (!found) return;
+      suppressRender = true;
+      updateClip(found.clip.id, { sticker: { background: target.value, shape: 'circle' } }, { history: false });
+      suppressRender = false;
+      return;
+    }
+    if (target.matches('[data-prop]')) applyRange(target);
+  });
+
+  details.addEventListener('change', (event) => {
+    const target = event.target;
+    const found = selectedClip();
+    if (!found) return;
+    if (target.matches('[data-clip-filter]')) {
+      updateClip(found.clip.id, { filter: target.value });
+      return;
+    }
+    if (target.matches('[data-clip-effect]')) {
+      updateClip(found.clip.id, { effect: target.value });
+      return;
+    }
+    if (target.matches('[data-clip-transition]')) {
+      const type = target.value;
+      const fades = TRANSITION_FADES[type] || { fadeIn: 0.2, fadeOut: 0.2 };
+      updateClip(found.clip.id, {
+        transition: type,
+        transitionDuration: found.clip.transitionDuration || 0.6,
+        ...(type === 'none' ? { fadeIn: 0, fadeOut: 0 } : fades),
+      });
+      return;
+    }
+    if (target.matches('[data-sticker-number]')) {
+      updateClip(found.clip.id, { sticker: { [target.dataset.stickerNumber]: Number(target.value) } });
+      return;
+    }
+    if (target.matches('[data-sticker-select]')) {
+      updateClip(found.clip.id, { sticker: { [target.dataset.stickerSelect]: target.value } });
+      return;
+    }
+    if (target.matches('[data-text-number]')) {
+      const key = target.dataset.textNumber;
+      updateClip(found.clip.id, { text: { [key]: Number(target.value) } });
+      return;
+    }
+    if (target.matches('[data-text-animation-select]')) {
+      const value = target.value;
+      const item = TEXT_ANIMATIONS.find((animation) => animation.id === value);
+      updateClip(found.clip.id, {
+        text: {
+          animation: value,
+          animationPhase: item?.phase || 'in',
+          animationDuration: item?.duration || found.clip.text?.animationDuration || 0.6,
+        },
+      });
+      return;
+    }
+    if (target.matches('[data-text-select]')) {
+      const key = target.dataset.textSelect;
+      updateClip(found.clip.id, { text: { [key]: target.value } });
+      return;
+    }
+    if (target.matches('[data-prop-number]')) {
+      const key = target.dataset.propNumber;
+      const value = Number(target.value);
+      updateClip(found.clip.id, { [key]: value });
+    }
+  });
+
+  subscriptions.push(on('project', render));
+  subscriptions.push(on('selection', render));
+
+  render();
+
+  return {
+    element: host,
+    destroy() {
+      subscriptions.forEach((off) => off());
+    },
+  };
+}
