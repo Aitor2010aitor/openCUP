@@ -1,28 +1,55 @@
-# 🎬CUP 
+# 🎬 OpenCUP
 
-> ⚠️ **PROYECTO EN DESARROLLO ACTIVO**  
-> **Próximamente se subirá el código fuente y la primera versión Beta.**
-
----
-
-## 📌 ¿Qué es este proyecto?
-
-Este proyecto es un **clon idéntico y perfecto de CapCut**. El objetivo es replicar al 100% tanto su interfaz gráfica como **absolutamente todas sus herramientas** y funciones de edición.
-
-Para lograr esta réplica exacta, el desarrollo se está realizando mediante **ingeniería inversa** utilizando la herramienta [REA (morluto/rea)](https://github.com/morluto/rea) y el soporte de **Inteligencia Artificial totalmente Open Code**.
+> ⚠️ **PROYECTO EN DESARROLLO ACTIVO**
+>
+> **Próximamente se publicarán el código fuente y la primera versión Beta.**
 
 ---
 
-## 🛠️ Estado Actual del Proyecto
+## 📌 ¿Qué es OpenCUP?
 
-- 🚧 **Fase de depuración:** Actualmente me encuentro arreglando errores, depurando el código y puliendo todas las herramientas para que funcionen exactamente como en el programa original.
-- 📦 **Primera Beta:** La primera versión que se publique en este repositorio será una **versión Beta**. Aunque faltarán algunos detalles por terminar y optimizar, incluirá la base funcional del clon.
-- 🔄 **Próxima publicación:** Dentro de poco subiré todo el código fuente y los archivos para que cualquiera pueda probarlo.
+**OpenCUP** es un proyecto de código abierto cuyo objetivo es recrear la interfaz gráfica y las herramientas de edición de vídeo de CapCut.
+
+El proyecto busca reproducir su diseño y sus funciones de edición, trabajando progresivamente para conseguir una experiencia similar a la del programa original.
+
+Para el desarrollo se utiliza **ingeniería inversa** mediante la herramienta [REA (morluto/rea)](https://github.com/morluto/rea), junto con el apoyo de herramientas de inteligencia artificial y tecnologías de código abierto.
 
 ---
 
-⭐ *¡Guarda este repositorio en favoritos o dale una estrella para enterarte al instante cuando suba la versión Beta!*
+## 🛠️ Estado actual del proyecto
 
+- 🚧 **Fase de depuración:** actualmente se están corrigiendo errores, depurando el código y mejorando las herramientas de edición.
+- 📦 **Primera versión Beta:** la primera versión pública será una Beta. Incluirá la base funcional del proyecto, aunque algunas funciones podrán estar incompletas o necesitar optimización.
+- 🔄 **Publicación del código fuente:** próximamente se publicarán el código y los archivos necesarios para que la comunidad pueda explorar y probar el proyecto.
 
+---
 
-<img width="3440" height="1440" alt="image" src="https://github.com/user-attachments/assets/7ffbca1f-3af6-4b31-8f7d-28267369978c" />
+## 🎥 Vídeo de la versión Alfa
+
+Ya puedes ver una demostración de la versión Alfa del proyecto:
+
+▶️ **[Ver el vídeo de OpenCUP en YouTube](https://youtu.be/p6qhIKqOXjE)**
+
+---
+
+## 🖼️ Vista previa del proyecto
+
+<img width="3440" height="1440" alt="Vista previa de OpenCUP" src="https://github.com/user-attachments/assets/7ffbca1f-3af6-4b31-8f7d-28267369978c" />
+
+---
+
+## ⭐ Apoya el proyecto
+
+Si te interesa OpenCUP:
+
+- ⭐ Dale una estrella al repositorio.
+- 👀 Sigue el proyecto para estar al tanto de las novedades.
+- 💬 Comparte tus ideas y sugerencias.
+- 🐛 Comunica los errores que encuentres cuando haya una versión disponible.
+
+Cada aportación ayuda a mejorar el proyecto.
+
+---
+
+**OpenCUP — Un proyecto en desarrollo para recrear la experiencia de edición de CapCut.**
+
