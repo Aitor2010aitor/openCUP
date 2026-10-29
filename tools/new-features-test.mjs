@@ -39,7 +39,7 @@ try {
 
   check(await page.$('.capcut-pill') !== null, 'home muestra acceso CapCut');
   check(await page.$('.side-ai') !== null, 'home muestra Puente IA');
-  check((await page.$$('.showcase-card')).length === 4, 'home muestra 4 escaparates');
+  check((await page.$$('.showcase-card')).length === 0, 'se eliminó el centro de creación con IA de la portada');
 
   // Crear proyecto desde el hero.
   await page.click('.hero-create');

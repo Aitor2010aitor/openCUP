@@ -430,15 +430,6 @@ export function mountHome(root) {
             <p>Edita clips describiéndolos</p>
           </button>
         </div>
-        <section class="home-section">
-          <div class="section-head">
-            <h2>Centro de creación con IA</h2>
-          </div>
-          <div class="ai-showcase" data-showcase-grid>
-            ${SHOWCASES.slice(0, 4).map(showcaseMarkup).join('')}
-            <button class="showcase-nav" data-showcase-next title="Más ideas">${icon('chevronRight', 15)}</button>
-          </div>
-        </section>
         <section class="home-section" data-projects-section>
           <div class="section-head">
             <h2>Proyectos</h2>
@@ -492,6 +483,7 @@ export function mountHome(root) {
   }
 
   function renderShowcase() {
+    if (!showcaseGrid) return;
     const ordered = SHOWCASES.slice(showcaseOffset).concat(SHOWCASES.slice(0, showcaseOffset)).slice(0, 4);
     showcaseGrid.innerHTML = ordered.map(showcaseMarkup).join('') + `<button class="showcase-nav" data-showcase-next title="Más ideas">${icon('chevronRight', 15)}</button>`;
   }
@@ -538,11 +530,11 @@ export function mountHome(root) {
 
   home.addEventListener('click', (event) => {
     const showcase = event.target.closest('[data-showcase]');
-    if (showcase) {
+    if (showcase && showcaseGrid) {
       void quickStart(showcase.dataset.showcase);
       return;
     }
-    if (event.target.closest('[data-showcase-next]')) {
+    if (event.target.closest('[data-showcase-next]') && showcaseGrid) {
       showcaseOffset = (showcaseOffset + 1) % SHOWCASES.length;
       renderShowcase();
       return;

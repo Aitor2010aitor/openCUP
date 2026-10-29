@@ -189,7 +189,30 @@ function rmsOf(buf) {
   return Math.sqrt(s / ch.length);
 }
 
-// ---------- Planificador ----------
+export async function transcribeMedia(media) {
+  const cfg = getLlmConfig();
+  if (!cfg.whisperUrl || !media?.url) return null;
+  try {
+    const res = await fetch(media.url);
+    const blob = await res.blob();
+    const form = new FormData();
+    form.append('file', blob, media.name || 'audio.webm');
+    if (cfg.whisperLanguage) form.append('language', cfg.whisperLanguage);
+    const r = await fetch(cfg.whisperUrl.replace(/\/$/, ''), { method: 'POST', body: form });
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (Array.isArray(d.segments)) return d.segments.map((s) => ({ start: s.start, end: s.end, text: (s.text || '').trim() })).filter((s) => s.text);
+    if (Array.isArray(d.subtitles)) return d.subtitles.map((s) => ({ start: s.start, end: s.end, text: (s.text || '').trim() })).filter((s) => s.text);
+    if (typeof d.text === 'string' && d.text.trim()) {
+      // sin tiempos: un solo subtítulo a lo largo del vídeo
+      return [{ start: 0, end: media.duration || 5, text: d.text.trim() }];
+    }
+    return null;
+  } catch (e) {
+    console.warn('transcribeMedia:', e);
+    return null;
+  }
+}
 // Convierte instrucción + análisis en un plan de operaciones estructuradas.
 export async function planEdit(instruction, analysis) {
   const text = (instruction || '').toLowerCase();
@@ -485,18 +508,26 @@ function applyTransitions(style) {
 }
 
 async function addSubtitles(lang) {
-  // Crea una pista de texto con un clip por cada segmento de silencio inverso (aprox).
-  // Transcripción real requiere un modelo (Whisper); aquí se generan marcadores editables.
+  // Solo para vídeos: transcripción real si hay endpoint Whisper configurado (estilo Drift),
+  // si no, marcadores editables por escena.
+  const videoMedia = Array.from(state.media.values()).find((m) => m.kind === 'video');
+  if (!videoMedia) { toast('No hay vídeo para subtítular', 'warn'); return; }
   const track = state.project.tracks.find((t) => t.type === 'text') || state.project.tracks[0];
-  const media = Array.from(state.media.values()).find((m) => m.kind === 'video');
-  if (!media) return;
-  const segs = media.scenes && media.scenes.length ? media.scenes : [0, media.duration];
-  for (let i = 0; i < segs.length - 1; i++) {
-    const s = segs[i], e = segs[i + 1];
+  const segs = await transcribeMedia(videoMedia);
+  if (segs && segs.length) {
+    for (const s of segs) {
+      addTextClip(s.text, { start: Math.max(0, s.start), duration: Math.max(0.5, (s.end - s.start) || 2), size: 42, weight: 700, color: '#ffffff', trackId: track.id });
+    }
+    toast(`Subtítulos generados por transcripción (${segs.length})`, 'success');
+    return;
+  }
+  const scenes = videoMedia.scenes && videoMedia.scenes.length ? videoMedia.scenes : [0, videoMedia.duration];
+  for (let i = 0; i < scenes.length - 1; i++) {
+    const s = scenes[i], e = scenes[i + 1];
     if (e - s < 0.8) continue;
     addTextClip(`Subtítulo ${i + 1}`, { start: s, duration: Math.min(e - s, 4), size: 42, weight: 700, color: '#ffffff', trackId: track.id });
   }
-  toast('Subtítulos generados (edítalos en el panel Texto). Para transcripción automática real, configura un modelo en Ajustes.', 'info');
+  toast('Subtítulos por escenas (configura Whisper en Ajustes para transcripción real)', 'info');
 }
 
 export function undoAutoEdit() {
@@ -545,6 +576,8 @@ export function autoEditPanelHtml() {
           <label style="font-size:11px">Ollama URL <input id="ae-ollama-url" value="${escapeHtml(cfg.ollamaUrl || '')}" placeholder="http://localhost:11434" style="width:100%"></label>
           <label style="font-size:11px">Modelo Ollama <input id="ae-ollama-model" value="${escapeHtml(cfg.ollamaModel || 'llama3.1')}" style="width:100%"></label>
           <label style="font-size:11px">OpenAI API key <input id="ae-openai-key" type="password" value="${escapeHtml(cfg.openaiKey || '')}" placeholder="sk-..." style="width:100%"></label>
+          <label style="font-size:11px">Whisper URL (transcripción) <input id="ae-whisper-url" value="${escapeHtml(cfg.whisperUrl || '')}" placeholder="http://localhost:8080/inference" style="width:100%"></label>
+          <label style="font-size:11px">Idioma Whisper <input id="ae-whisper-lang" value="${escapeHtml(cfg.whisperLanguage || 'es')}" placeholder="es" style="width:100%"></label>
           <button class="btn" id="ae-save-cfg">Guardar ajustes</button>
         </div>
       </details>
@@ -605,6 +638,8 @@ export function wireAutoEditPanel(root) {
       ollamaUrl: root.querySelector('#ae-ollama-url')?.value || '',
       ollamaModel: root.querySelector('#ae-ollama-model')?.value || 'llama3.1',
       openaiKey: root.querySelector('#ae-openai-key')?.value || '',
+      whisperUrl: root.querySelector('#ae-whisper-url')?.value || '',
+      whisperLanguage: root.querySelector('#ae-whisper-lang')?.value || 'es',
     });
     toast('Ajustes guardados', 'success');
   });
