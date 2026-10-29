@@ -372,6 +372,41 @@ export const TEXT_FONTS = [
   { value: 'Lucida Handwriting', label: 'Lucida Handwriting' },
 ];
 
+// Fuentes del sistema detectadas (Font Access API, solo Chromium).
+let systemFonts = [];
+let systemFontsLoaded = false;
+let systemFontsLoading = null;
+
+export async function loadSystemFonts() {
+  if (systemFontsLoaded) return systemFonts;
+  if (systemFontsLoading) return systemFontsLoading;
+  systemFontsLoading = (async () => {
+    try {
+      if (typeof window !== 'undefined' && typeof window.queryLocalFonts === 'function') {
+        const fontsPromise = window.queryLocalFonts();
+        const timeoutPromise = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000));
+        const fonts = await Promise.race([fontsPromise, timeoutPromise]);
+        const families = [...new Set(fonts.map((f) => f.family).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+        const known = new Set(TEXT_FONTS.map((f) => f.value.toLowerCase()));
+        systemFonts = families
+          .filter((f) => !known.has(f.toLowerCase()))
+          .map((f) => ({ value: f, label: `${f} (sistema)` }));
+      }
+    } catch (e) {
+      console.warn('loadSystemFonts:', e);
+      systemFonts = [];
+    }
+    systemFontsLoaded = true;
+    systemFontsLoading = null;
+    return systemFonts;
+  })();
+  return systemFontsLoading;
+}
+
+export function getFontList() {
+  return [...TEXT_FONTS, ...systemFonts];
+}
+
 export const TEXT_CASES = [
   { value: 'none', label: 'Aa', title: 'Texto original' },
   { value: 'upper', label: 'AA', title: 'Mayúsculas' },

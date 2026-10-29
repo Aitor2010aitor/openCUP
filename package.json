@@ -16,7 +16,8 @@
     "test:audio": "node tools/audio-export-test.mjs",
     "test:visual": "node tools/visual-test.mjs",
     "test:preview": "node tools/preview-drag-test.mjs",
-    "test:effects": "node tools/effects-visual-test.mjs"
+    "test:effects": "node tools/effects-visual-test.mjs",
+    "test:subtitles": "node tools/subtitles-progress-test.mjs"
   },
   "devDependencies": {
     "puppeteer-core": "^25.16.0"

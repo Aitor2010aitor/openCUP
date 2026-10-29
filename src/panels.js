@@ -4,6 +4,7 @@ import {
   setPanel,
   selectedClip,
   addTextClip,
+  clearSubtitleClips,
   addStickerClip,
   addMediaToTimeline,
   updateClip,
@@ -60,12 +61,14 @@ import {
   TEXT_ANIMATION_GROUPS,
   TEXT_ANIMATIONS,
   TEXT_FONTS,
+  getFontList,
+  loadSystemFonts,
   TEXT_CASES,
   TEXT_ALIGNS,
   TEXT_WEIGHTS,
 } from './text-catalog.js';
 import { openCapCutImportDialog } from './capcut.js';
-import { autoEditPanelHtml, wireAutoEditPanel } from './auto-edit.js';
+import { autoEditPanelHtml, wireAutoEditPanel, isWhisperModelReady, ensureWhisperPipeline, generateSubtitlesForVideo } from './auto-edit.js';
 import { fixWebmDuration } from './webm.js';
 import { escapeHtml, formatTime, formatBytes, toast, clamp } from './utils.js';
 
@@ -922,6 +925,306 @@ export function mountLeftPanel(host) {
       </div>`;
   }
 
+  let whisperReady = false;
+  let whisperChecking = false;
+  let whisperCheckedOnce = false;
+
+  async function checkWhisperStatus() {
+    if (whisperChecking) return;
+    whisperChecking = true;
+    try {
+      whisperReady = await isWhisperModelReady();
+      whisperCheckedOnce = true;
+    } catch {
+      whisperReady = false;
+    } finally {
+      whisperChecking = false;
+      if (host.isConnected && state.panel === 'captions') {
+        render();
+      }
+    }
+  }
+
+  function openSubtitleModal({ mode = 'generate' } = {}) {
+    const videos = Array.from(state.media.values()).filter((m) => m.kind === 'video' || m.kind === 'audio');
+    if (!videos.length && mode === 'generate') {
+      toast('Importa primero un vídeo o archivo de audio a la biblioteca', 'warn', 3500);
+      return;
+    }
+
+    const currentClip = selectedClip()?.clip;
+    const defaultMediaId = (currentClip?.mediaId && state.media.has(currentClip.mediaId))
+      ? currentClip.mediaId
+      : (videos[0]?.id || '');
+
+    let activeStyle = captionStyle;
+    let abortController = null;
+    let running = false;
+
+    const bodyHtml = `
+      <div data-subs-config ${mode === 'download' ? 'class="hidden"' : ''}>
+        <div class="field" style="margin-bottom:12px">
+          <label style="font-size:11px;font-weight:600;display:block;margin-bottom:5px">Vídeo / Audio a transcribir</label>
+          <select class="input" data-subs-media style="width:100%">
+            ${videos.map((v) => `<option value="${v.id}" ${v.id === defaultMediaId ? 'selected' : ''}>${escapeHtml(v.name)} (${formatTime(v.duration || 0)})</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="field" style="margin-bottom:12px">
+          <label style="font-size:11px;font-weight:600;display:block;margin-bottom:5px">Idioma de la voz</label>
+          <select class="input" data-subs-lang style="width:100%">
+            <option value="es" selected>Español (es)</option>
+            <option value="en">Inglés (en)</option>
+            <option value="auto">Detectar automáticamente</option>
+            <option value="fr">Francés (fr)</option>
+            <option value="de">Alemán (de)</option>
+            <option value="it">Italiano (it)</option>
+            <option value="pt">Portugués (pt)</option>
+          </select>
+        </div>
+
+        <div class="field" style="margin-bottom:12px">
+          <label style="font-size:11px;font-weight:600;display:block;margin-bottom:5px">Estilo de subtítulo</label>
+          <div class="caption-styles" style="padding:0">
+            ${CAPTION_STYLES.map((style) => `
+              <button type="button" class="caption-style${activeStyle === style.id ? ' active' : ''}" data-modal-style="${style.id}">
+                <span style="font-weight:${style.weight};color:${style.color};${style.background !== 'transparent' ? `background:${style.background};` : ''}">${style.label}</span>
+              </button>`).join('')}
+          </div>
+        </div>
+
+        <div class="field" style="margin-bottom:12px">
+          <label style="display:flex;align-items:center;gap:7px;font-size:11.5px;cursor:pointer">
+            <input type="checkbox" data-subs-replace checked style="cursor:pointer" />
+            <span>Reemplazar subtítulos actuales en la pista de texto</span>
+          </label>
+        </div>
+
+        <div class="subs-notice ${whisperReady ? 'is-ready' : 'is-pending'}" style="margin-top:8px">
+          <div style="display:flex;align-items:center;gap:7px;font-weight:600;font-size:11px">
+            ${whisperReady ? icon('check', 14) : icon('download', 14)}
+            <span>${whisperReady ? 'Modelo Whisper disponible localmente' : 'Descarga inicial requerida (~40 MB)'}</span>
+          </div>
+          <div style="margin-top:4px;font-size:10px;color:#9a9a9a;line-height:1.45">
+            ${whisperReady
+              ? 'El modelo Whisper Tiny ya está descargado. La transcripción se ejecutará de forma directa sin esperas de descarga.'
+              : 'La primera vez se descargará la dependencia Whisper (~40 MB). Podrás ver la barra de progreso del 1% al 100% durante la descarga y después durante la transcripción.'}
+          </div>
+        </div>
+      </div>
+
+      <div data-subs-progress ${mode === 'download' ? '' : 'class="hidden"'} style="padding:6px 0">
+        <div class="subs-steps" style="display:flex;gap:8px;margin-bottom:16px">
+          <div class="subs-step" data-step-download style="flex:1;padding:8px 10px;border-radius:6px;background:#2a2a2a;border:1px solid #3d3d3d;display:flex;align-items:center;gap:8px">
+            <span class="subs-step-num" style="width:20px;height:20px;border-radius:50%;background:#3a3a3a;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700">1</span>
+            <div style="min-width:0;line-height:1.3">
+              <strong style="display:block;font-size:11px">Descarga de IA</strong>
+              <small style="font-size:9.5px;color:#8a8a8a" data-step-download-status>${whisperReady ? 'Listo' : 'Pendiente'}</small>
+            </div>
+          </div>
+          ${mode !== 'download' ? `
+          <div class="subs-step" data-step-transcribe style="flex:1;padding:8px 10px;border-radius:6px;background:#2a2a2a;border:1px solid #3d3d3d;display:flex;align-items:center;gap:8px">
+            <span class="subs-step-num" style="width:20px;height:20px;border-radius:50%;background:#3a3a3a;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700">2</span>
+            <div style="min-width:0;line-height:1.3">
+              <strong style="display:block;font-size:11px">Transcripción</strong>
+              <small style="font-size:9.5px;color:#8a8a8a" data-step-transcribe-status>En espera</small>
+            </div>
+          </div>` : ''}
+        </div>
+
+        <div class="subs-progress-card" style="background:#1e1e1e;border:1px solid #3a3a3a;border-radius:8px;padding:16px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px">
+            <span data-subs-label style="font-size:12px;font-weight:600;color:#efefef">Iniciando…</span>
+            <span data-subs-percent style="font-size:20px;font-weight:800;color:var(--accent-2);font-variant-numeric:tabular-nums">0%</span>
+          </div>
+
+          <div class="progress" style="height:8px;background:#2d2d2d;border-radius:4px;overflow:hidden">
+            <div data-subs-bar style="height:100%;width:0%;background:linear-gradient(90deg, var(--accent-2), #8ffcff);border-radius:4px;transition:width 0.25s ease-out"></div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:10px;color:#8a8a8a">
+            <span data-subs-detail style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px">Preparando componentes…</span>
+            <span data-subs-subdetail style="white-space:nowrap;font-variant-numeric:tabular-nums"></span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const footerHtml = mode === 'download'
+      ? `<button class="btn btn-danger" data-subs-abort>Cancelar</button>`
+      : `<button class="btn" data-modal-close>Cancelar</button><button class="btn btn-primary" data-subs-start>${icon('sparkles', 14)} Iniciar generación</button>`;
+
+    const modal = openModal({
+      title: mode === 'download' ? 'Descarga de modelo Whisper IA' : 'Generador de subtítulos con IA',
+      width: 520,
+      body: bodyHtml,
+      footer: footerHtml,
+      dismissible: true,
+      onMount(api) {
+        const configView = api.body.querySelector('[data-subs-config]');
+        const progressView = api.body.querySelector('[data-subs-progress]');
+        const startBtn = api.foot.querySelector('[data-subs-start]');
+        const labelEl = api.body.querySelector('[data-subs-label]');
+        const percentEl = api.body.querySelector('[data-subs-percent]');
+        const barEl = api.body.querySelector('[data-subs-bar]');
+        const detailEl = api.body.querySelector('[data-subs-detail]');
+        const subdetailEl = api.body.querySelector('[data-subs-subdetail]');
+        const stepDownload = api.body.querySelector('[data-step-download]');
+        const stepDownloadStatus = api.body.querySelector('[data-step-download-status]');
+        const stepTranscribe = api.body.querySelector('[data-step-transcribe]');
+        const stepTranscribeStatus = api.body.querySelector('[data-step-transcribe-status]');
+
+        api.body.querySelectorAll('[data-modal-style]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            activeStyle = btn.dataset.modalStyle;
+            captionStyle = activeStyle;
+            api.body.querySelectorAll('[data-modal-style]').forEach((b) => b.classList.remove('active'));
+            btn.classList.add('active');
+          });
+        });
+
+        const updateProgress = (info) => {
+          if (!info) return;
+          const pct = Math.min(100, Math.max(0, Math.round(info.percent || 0)));
+          if (percentEl) percentEl.textContent = `${pct}%`;
+          if (barEl) barEl.style.width = `${pct}%`;
+          if (detailEl && info.detail) detailEl.textContent = info.detail;
+
+          if (info.stage === 'download') {
+            if (stepDownload) {
+              stepDownload.classList.add('active');
+              stepDownload.classList.remove('completed');
+            }
+            if (stepDownloadStatus) stepDownloadStatus.textContent = `${pct}%`;
+            if (labelEl) labelEl.textContent = `Descargando modelo Whisper (~40 MB)…`;
+            if (pct >= 100) {
+              if (stepDownload) {
+                stepDownload.classList.remove('active');
+                stepDownload.classList.add('completed');
+              }
+              if (stepDownloadStatus) stepDownloadStatus.textContent = 'Completado';
+            }
+          } else if (info.stage === 'audio') {
+            if (stepDownload) {
+              stepDownload.classList.remove('active');
+              stepDownload.classList.add('completed');
+            }
+            if (stepDownloadStatus) stepDownloadStatus.textContent = 'Completado';
+            if (stepTranscribe) stepTranscribe.classList.add('active');
+            if (labelEl) labelEl.textContent = 'Extrayendo y preparando audio…';
+          } else if (info.stage === 'transcribe') {
+            if (stepDownload) {
+              stepDownload.classList.remove('active');
+              stepDownload.classList.add('completed');
+            }
+            if (stepDownloadStatus) stepDownloadStatus.textContent = 'Completado';
+            if (stepTranscribe) {
+              stepTranscribe.classList.add('active');
+              stepTranscribe.classList.remove('completed');
+            }
+            if (stepTranscribeStatus) stepTranscribeStatus.textContent = `${pct}%`;
+            if (labelEl) labelEl.textContent = `Transcribiendo audio y sincronizando…`;
+            if (info.currentChunk && info.totalChunks && subdetailEl) {
+              subdetailEl.textContent = `Fragmento ${info.currentChunk}/${info.totalChunks}`;
+            }
+            if (pct >= 100) {
+              if (stepTranscribe) {
+                stepTranscribe.classList.remove('active');
+                stepTranscribe.classList.add('completed');
+              }
+              if (stepTranscribeStatus) stepTranscribeStatus.textContent = 'Completado';
+            }
+          }
+        };
+
+        const executeProcess = async () => {
+          running = true;
+          abortController = new AbortController();
+          if (configView) configView.classList.add('hidden');
+          if (progressView) progressView.classList.remove('hidden');
+
+          api.foot.innerHTML = `<button class="btn btn-danger" data-subs-abort>Cancelar proceso</button>`;
+          const abortBtn = api.foot.querySelector('[data-subs-abort]');
+          abortBtn?.addEventListener('click', () => {
+            if (abortController) {
+              abortController.abort();
+              toast('Cancelando generación de subtítulos…', 'info');
+            }
+          });
+
+          try {
+            if (mode === 'download') {
+              updateProgress({ stage: 'download', percent: 1, detail: 'Iniciando descarga de Whisper Tiny…' });
+              await ensureWhisperPipeline({
+                onProgress: updateProgress,
+                signal: abortController.signal,
+              });
+              whisperReady = true;
+              updateProgress({ stage: 'download', percent: 100, detail: '¡Modelo Whisper descargado y listo!' });
+              if (labelEl) labelEl.textContent = '¡Descarga completada con éxito!';
+              toast('Modelo Whisper IA descargado (~40 MB)', 'success');
+              setTimeout(() => {
+                api.close();
+                render();
+              }, 1200);
+              return;
+            }
+
+            const mediaSelect = api.body.querySelector('[data-subs-media]');
+            const langSelect = api.body.querySelector('[data-subs-lang]');
+            const replaceCheck = api.body.querySelector('[data-subs-replace]');
+
+            const selectedMediaId = mediaSelect?.value || defaultMediaId;
+            const targetMedia = state.media.get(selectedMediaId) || videos[0];
+            const language = langSelect?.value || 'es';
+            const replace = replaceCheck ? replaceCheck.checked : true;
+
+            const res = await generateSubtitlesForVideo({
+              media: targetMedia,
+              language,
+              captionStyle: activeStyle,
+              replace,
+              onProgress: updateProgress,
+              signal: abortController.signal,
+            });
+
+            whisperReady = true;
+            updateProgress({ stage: 'transcribe', percent: 100, detail: `${res.count} subtítulos insertados en la línea de tiempo` });
+            if (labelEl) labelEl.textContent = '¡Subtítulos generados con éxito!';
+            toast(`¡${res.count} subtítulos generados!`, 'success', 3000);
+
+            setTimeout(() => {
+              api.close();
+              render();
+            }, 1200);
+          } catch (err) {
+            if (abortController?.signal?.aborted) {
+              toast('Operación cancelada', 'info');
+              api.close();
+              return;
+            }
+            console.error('Error generando subtítulos:', err);
+            toast('Error: ' + (err?.message || 'Fallo al generar subtítulos'), 'error', 4500);
+            if (labelEl) labelEl.textContent = 'Error al generar subtítulos';
+            if (detailEl) detailEl.textContent = err?.message || 'Error inesperado';
+            api.foot.innerHTML = `<button class="btn btn-primary" data-close-err>Aceptar</button>`;
+            api.foot.querySelector('[data-close-err]')?.addEventListener('click', api.close);
+          } finally {
+            running = false;
+          }
+        };
+
+        if (mode === 'download') {
+          void executeProcess();
+        } else {
+          startBtn?.addEventListener('click', () => {
+            void executeProcess();
+          });
+        }
+      },
+    });
+  }
+
   function captionsPanel() {
     const textClips = state.project?.tracks
       .filter((track) => track.type === 'text')
@@ -936,13 +1239,29 @@ export function mountLeftPanel(host) {
             ${captionStyle === style.id ? icon('check', 11) : ''}
           </button>`).join('')}
       </div>
+      <div class="caption-ai-banner ${whisperReady ? 'is-ready' : 'is-pending'}">
+        <div class="caption-ai-banner-head">
+          <span class="caption-ai-tag">
+            ${whisperReady ? `${icon('check', 12)} Dependencia Whisper lista` : `${icon('sparkles', 12)} Requiere descarga (~40 MB)`}
+          </span>
+          ${!whisperReady ? `<button class="btn btn-secondary btn-small" data-pre-download-subs style="font-size:9.5px;padding:2px 8px">${icon('download', 11)} Descargar</button>` : ''}
+        </div>
+        <div class="caption-ai-banner-desc">
+          ${whisperReady
+            ? 'Modelo Whisper Tiny disponible en tu navegador. Genera subtítulos al instante sin conexión.'
+            : 'La primera vez se descargará la dependencia Whisper (~40 MB) con barra de progreso del 1 al 100%.'}
+        </div>
+      </div>
       <div class="caption-actions">
-        <button class="btn btn-primary btn-block" data-add-subtitle>${icon('plus', 14)} Añadir subtítulo en el cursor</button>
+        <button class="btn btn-primary btn-block" data-gen-subs>${icon('sparkles', 14)} Generar subtítulos con IA</button>
+        <button class="btn btn-block" data-add-subtitle>${icon('plus', 14)} Añadir subtítulo en el cursor</button>
         <button class="btn btn-block" data-import-srt>${icon('upload', 14)} Importar archivo .srt</button>
-        <button class="btn btn-block" data-gen-subs>${icon('sparkles', 14)} Generar subtítulos con IA</button>
       </div>
       ${textClips.length ? `
-        <div class="caption-list-head">Subtítulos en la línea de tiempo <b>${textClips.length}</b></div>
+        <div class="caption-list-head">
+          <span>Subtítulos en la línea de tiempo <b>${textClips.length}</b></span>
+          <button class="icon-btn" data-clear-subs title="Eliminar todos los subtítulos" style="color:#d07070;width:22px;height:22px">${icon('trash', 12)}</button>
+        </div>
         <div class="caption-list">
           ${textClips.map((clip) => `
             <button class="caption-row${state.selection === clip.id ? ' active' : ''}" data-caption-select="${clip.id}">
@@ -950,7 +1269,7 @@ export function mountLeftPanel(host) {
               <span class="caption-text">${escapeHtml(clip.text?.content || '')}</span>
             </button>`).join('')}
         </div>` : ''}
-      <div class="modal-note" style="margin:8px 12px 16px">${icon('info', 13)} La transcripción automática necesita un servicio de IA en la nube. Puedes escribir subtítulos o importarlos en SRT.</div>`;
+      <div class="modal-note" style="margin:8px 12px 16px">${icon('info', 13)} La transcripción automática procesa el audio localmente con Whisper para máxima privacidad y precisión.</div>`;
   }
 
   function avatarPanel() {
@@ -1061,7 +1380,10 @@ export function mountLeftPanel(host) {
       return filterGallery(active, true, filterCategory);
     }
     if (panel === 'transitions') return transitionPanel();
-    if (panel === 'captions') return captionsPanel();
+    if (panel === 'captions') {
+      if (!whisperCheckedOnce && !whisperChecking) checkWhisperStatus();
+      return captionsPanel();
+    }
     if (panel === 'adjust') return adjustPanel();
     if (panel === 'templates') {
       return `
@@ -1319,6 +1641,14 @@ export function mountLeftPanel(host) {
       unavailable('Generar con IA', 'La generación de imágenes y videos con IA requiere un servicio en la nube. Puedes importar tus propios archivos, usar las plantillas o crear títulos y stickers.');
       return;
     }
+    if (event.target.closest('[data-load-system-fonts]')) {
+      toast('Detectando fuentes del sistema…', 'info', 1600);
+      loadSystemFonts().then((fonts) => {
+        toast(fonts.length ? `${fonts.length} fuentes nuevas detectadas` : 'No se detectaron fuentes adicionales (o el navegador no lo permite)', fonts.length ? 'success' : 'warn');
+        render();
+      });
+      return;
+    }
 
     const help = event.target.closest('[data-help]');
     if (help) { openHelp(); return; }
@@ -1565,18 +1895,32 @@ export function mountLeftPanel(host) {
     const genSubs = event.target.closest('[data-gen-subs]');
     if (genSubs) {
       if (!state.project) return;
-      const video = Array.from(state.media.values()).find((m) => m.kind === 'video');
-      if (!video) { toast('Importa un vídeo primero', 'warn'); return; }
-      toast('Generando subtítulos… (puede tardar)', 'info');
-      (async () => {
-        try {
-          const { analyzeProject, planEdit, applyPlan } = await import('./auto-edit.js');
-          const analysis = await analyzeProject();
-          const plan = await planEdit('añade subtítulos automáticos en español sincronizados', analysis);
-          await applyPlan(plan, (i, t, op) => {});
-          toast('Subtítulos generados', 'success');
-        } catch (e) { toast('Error: ' + e.message, 'error'); }
-      })();
+      openSubtitleModal({ mode: 'generate' });
+      return;
+    }
+
+    const preDownload = event.target.closest('[data-pre-download-subs]');
+    if (preDownload) {
+      if (!state.project) return;
+      openSubtitleModal({ mode: 'download' });
+      return;
+    }
+
+    const clearSubs = event.target.closest('[data-clear-subs]');
+    if (clearSubs) {
+      confirmDialog({
+        title: '¿Eliminar todos los subtítulos?',
+        message: 'Se borrarán todos los clips de texto de subtítulos de la línea de tiempo. Esta acción se puede deshacer con Ctrl+Z.',
+        confirmLabel: 'Eliminar todos',
+        danger: true,
+      }).then((confirmed) => {
+        if (!confirmed) return;
+        const count = clearSubtitleClips();
+        if (count > 0) {
+          toast(`${count} subtítulo${count === 1 ? '' : 's'} eliminado${count === 1 ? '' : 's'}`, 'info');
+          render();
+        }
+      });
       return;
     }
 
@@ -2178,9 +2522,11 @@ export function mountDetailsPanel(host) {
         <div class="field">
           <label>Fuente</label>
           <select class="input" data-text-select="font">
-            ${TEXT_FONTS.map((font) => `<option value="${escapeHtml(font.value)}" ${text.font === font.value ? 'selected' : ''}>${escapeHtml(font.label)}</option>`).join('')}
+            ${getFontList().map((font) => `<option value="${escapeHtml(font.value)}" ${text.font === font.value ? 'selected' : ''}>${escapeHtml(font.label)}</option>`).join('')}
           </select>
         </div>
+        <button class="btn btn-small btn-ghost" data-load-system-fonts style="margin-top:6px">${icon('refresh', 13)} Detectar fuentes del sistema</button>
+        <div class="modal-note" style="margin:4px 0 0;font-size:11px">Detecta las fuentes instaladas en tu equipo (requiere permiso del navegador). Solo Chromium.</div>
         <div class="field-row">
           <div class="field">
             <label>Tamaño de la fuente</label>

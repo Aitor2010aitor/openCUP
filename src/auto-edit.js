@@ -5,7 +5,7 @@
 // usa un planificador por palabras clave, siempre funcional.
 
 import { state, on, updateProject, newProject, importFiles, addMediaToTimeline,
-  addTextClip, updateClip, selectClip, seek, saveNow, projectDuration, trackById, findClip } from './store.js';
+  addTextClip, addSubtitleClips, clearSubtitleClips, updateClip, selectClip, seek, saveNow, projectDuration, trackById, findClip } from './store.js';
 import { renderStill } from './renderer.js';
 import { escapeHtml, toast, formatTime } from './utils.js';
 import { icon } from './icons.js';
@@ -189,17 +189,21 @@ function rmsOf(buf) {
   return Math.sqrt(s / ch.length);
 }
 
-export async function transcribeMedia(media, onProgress) {
+export async function transcribeMedia(media, onProgress, options = {}) {
   const cfg = getLlmConfig();
   if (cfg.whisperUrl && media?.url) {
     try {
+      const progressCb = typeof onProgress === 'function' ? onProgress : options.onProgress;
+      progressCb?.({ stage: 'transcribe', percent: 10, detail: 'Enviando audio al servidor Whisper remoto…' });
       const res = await fetch(media.url);
       const blob = await res.blob();
       const form = new FormData();
       form.append('file', blob, media.name || 'audio.webm');
-      if (cfg.whisperLanguage) form.append('language', cfg.whisperLanguage);
+      const lang = options.language || cfg.whisperLanguage;
+      if (lang && lang !== 'auto') form.append('language', lang);
       const r = await fetch(cfg.whisperUrl.replace(/\/$/, ''), { method: 'POST', body: form });
       if (r.ok) {
+        progressCb?.({ stage: 'transcribe', percent: 80, detail: 'Procesando transcripción del servidor…' });
         const d = await r.json();
         let segments = null;
         let words = [];
@@ -214,12 +218,17 @@ export async function transcribeMedia(media, onProgress) {
         }
         if (segments) {
           if (!words.length) for (const s of segments) { const ws = s.text.split(/\s+/); const dur = Math.max(0.1, s.end - s.start); ws.forEach((w, i) => words.push({ word: w, start: s.start + (dur * i / ws.length), end: s.start + (dur * (i + 1) / ws.length) })); }
+          progressCb?.({ stage: 'transcribe', percent: 100, detail: 'Transcripción remota finalizada' });
           return { segments, words };
         }
       }
     } catch (e) { console.warn('transcribeMedia (endpoint):', e); }
   }
-  const t = await transcribeWithTransformers(media, onProgress);
+  const t = await transcribeWithTransformers(media, {
+    onProgress: typeof onProgress === 'function' ? onProgress : options.onProgress,
+    language: options.language || 'es',
+    signal: options.signal,
+  });
   if (t) return t;
   return null;
 }
@@ -356,38 +365,367 @@ async function parseIntent(instruction, analysis) {
   };
 }
 
-export async function transcribeWithTransformers(media, onProgress) {
-  if (!media?.url) return null;
+// ---------- Whisper Model & Transcription Helpers ----------
+export class ModelDownloadTracker {
+  constructor(onProgress, estimatedTotal = 43_000_000) {
+    this.onProgress = onProgress;
+    this.estimatedTotal = estimatedTotal;
+    this.files = new Map();
+    this.highestPercent = 0;
+  }
+
+  handleEvent(p) {
+    if (!p) return;
+    const file = p.file || (p.name ? String(p.name).split('/').pop() : 'modelo');
+    const status = p.status || '';
+
+    if (status === 'initiate') {
+      if (!this.files.has(file)) {
+        this.files.set(file, { loaded: 0, total: p.total || 0 });
+      }
+    } else if (status === 'progress') {
+      const entry = this.files.get(file) || { loaded: 0, total: 0 };
+      entry.loaded = p.loaded || entry.loaded || 0;
+      if (p.total) entry.total = p.total;
+      this.files.set(file, entry);
+    } else if (status === 'done') {
+      const entry = this.files.get(file) || { loaded: 0, total: 0 };
+      entry.loaded = entry.total || p.loaded || 1;
+      this.files.set(file, entry);
+    }
+
+    let totalLoaded = 0;
+    let knownTotal = 0;
+    for (const entry of this.files.values()) {
+      totalLoaded += entry.loaded;
+      knownTotal += entry.total;
+    }
+
+    const effectiveTotal = Math.max(this.estimatedTotal, knownTotal);
+    let rawPercent = Math.round((totalLoaded / effectiveTotal) * 100);
+
+    if (file.includes('.onnx') && typeof p.progress === 'number') {
+      const onnxPercent = Math.round(p.progress * 0.92);
+      rawPercent = Math.max(rawPercent, onnxPercent);
+    }
+
+    if (status === 'ready') {
+      this.highestPercent = 100;
+    } else {
+      this.highestPercent = Math.max(this.highestPercent, Math.min(99, Math.max(1, rawPercent)));
+    }
+
+    const loadedMb = (totalLoaded / (1024 * 1024)).toFixed(1);
+    const totalMb = (effectiveTotal / (1024 * 1024)).toFixed(1);
+    const fileName = file.split('/').pop();
+
+    let detail = `Descargando componentes (${loadedMb} MB / ${totalMb} MB)`;
+    if (fileName) {
+      detail = `Descargando ${fileName} (${loadedMb} MB / ${totalMb} MB)`;
+    }
+    if (status === 'ready') {
+      detail = 'Modelo Whisper cargado y listo';
+    }
+
+    const info = {
+      stage: 'download',
+      percent: this.highestPercent,
+      detail,
+      file,
+      loaded: totalLoaded,
+      total: effectiveTotal,
+      status,
+    };
+    if (typeof this.onProgress === 'function') {
+      this.onProgress(info);
+    }
+  }
+}
+
+export class TranscriptionProgressTracker {
+  constructor(onProgress, totalDuration = 10) {
+    this.onProgress = onProgress;
+    this.totalDuration = totalDuration;
+    this.chunkStep = 20;
+    this.totalChunks = totalDuration <= 30 ? 1 : Math.ceil((totalDuration - 30) / this.chunkStep) + 1;
+    this.processedChunks = 0;
+    this.currentPercent = 1;
+    this.targetPercent = 1;
+    this.timer = null;
+    this.startInterpolation();
+  }
+
+  startInterpolation() {
+    this.timer = setInterval(() => {
+      if (this.currentPercent < this.targetPercent) {
+        this.currentPercent += 1;
+        this.emit();
+      } else if (this.targetPercent < 95 && this.currentPercent < this.targetPercent + 4) {
+        this.currentPercent += 0.25;
+        this.emit();
+      }
+    }, 120);
+  }
+
+  handleChunk(chunk) {
+    this.processedChunks += 1;
+    const chunkPct = Math.round((this.processedChunks / this.totalChunks) * 95);
+    this.targetPercent = Math.max(this.targetPercent, Math.min(95, chunkPct));
+    this.emit(`Transcribiendo audio: fragmento ${this.processedChunks} de ${this.totalChunks}…`);
+  }
+
+  finish() {
+    clearInterval(this.timer);
+    this.currentPercent = 100;
+    this.emit('Transcripción finalizada');
+  }
+
+  destroy() {
+    clearInterval(this.timer);
+  }
+
+  emit(detail) {
+    const pct = Math.min(100, Math.max(1, Math.round(this.currentPercent)));
+    const info = {
+      stage: 'transcribe',
+      percent: pct,
+      currentChunk: this.processedChunks,
+      totalChunks: this.totalChunks,
+      detail: detail || `Transcribiendo audio (${pct}%)…`,
+    };
+    if (typeof this.onProgress === 'function') {
+      this.onProgress(info);
+    }
+  }
+}
+
+let cachedTranscriberPromise = null;
+let cachedTranscriber = null;
+
+export async function isWhisperModelDownloaded(modelName = 'Xenova/whisper-tiny') {
+  if (typeof window === 'undefined' || typeof caches === 'undefined') return false;
   try {
-    const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
-    onProgress && onProgress('Descargando modelo Whisper (primera vez, ~40 MB)...');
-    const transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
-      progress_callback: (p) => onProgress && onProgress((p.status || 'cargando') + ' ' + (p.progress ? p.progress.toFixed(0) + '%' : '')),
+    const cache = await caches.open('transformers-cache');
+    const keys = await cache.keys();
+    return keys.some((req) => req.url.includes(modelName) && (req.url.includes('model_quantized.onnx') || req.url.includes('model.onnx')));
+  } catch {
+    return false;
+  }
+}
+
+export async function isWhisperModelReady(modelName = 'Xenova/whisper-tiny') {
+  if (cachedTranscriber) return true;
+  return await isWhisperModelDownloaded(modelName);
+}
+
+export async function ensureWhisperPipeline({ onProgress, signal } = {}) {
+  if (cachedTranscriber) {
+    if (typeof onProgress === 'function') {
+      onProgress({ stage: 'download', percent: 100, detail: 'Modelo de IA listo en memoria' });
+    }
+    return cachedTranscriber;
+  }
+  if (cachedTranscriberPromise) {
+    return await cachedTranscriberPromise;
+  }
+
+  cachedTranscriberPromise = (async () => {
+    if (typeof onProgress === 'function') {
+      onProgress({ stage: 'download', percent: 1, detail: 'Cargando motor de IA Transformers…' });
+    }
+    const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+    env.allowLocalModels = false;
+    env.useBrowserCache = true;
+
+    if (signal?.aborted) throw new Error('Operación cancelada');
+
+    const downloadTracker = new ModelDownloadTracker((info) => {
+      if (signal?.aborted) return;
+      if (typeof onProgress === 'function') onProgress(info);
     });
-    onProgress && onProgress('Transcribiendo...');
-    const buf = await mediaToAudioBuffer(media);
-    const result = await transcriber(buf.getChannelData(0), { sampling_rate: buf.sampleRate, chunk_length_s: 30, stride_length_s: 5, return_timestamps: 'word' });
-    const chunks = result?.chunks || (result?.text ? [{ text: result.text, timestamp: [0, media.duration || 5] }] : []);
-    const segments = [];
-    const words = [];
-    for (const c of chunks) {
-      const [s, e] = c.timestamp || [0, media.duration || 5];
-      const t = (c.text || '').trim();
-      if (!t) continue;
-      segments.push({ start: s, end: e, text: t });
-      const ws = t.split(/\s+/);
-      const dur = Math.max(0.1, e - s);
-      ws.forEach((w, i) => words.push({ word: w, start: s + (dur * i / ws.length), end: s + (dur * (i + 1) / ws.length) }));
+
+    const transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
+      progress_callback: (p) => downloadTracker.handleEvent(p),
+    });
+
+    if (signal?.aborted) {
+      cachedTranscriberPromise = null;
+      throw new Error('Operación cancelada');
     }
-    if (Array.isArray(result?.words)) {
-      words.length = 0;
-      for (const w of result.words) words.push({ word: (w.word || w.text || '').trim(), start: w.start ?? w.timestamp?.[0], end: w.end ?? w.timestamp?.[1] });
+
+    cachedTranscriber = transcriber;
+    if (typeof onProgress === 'function') {
+      onProgress({ stage: 'download', percent: 100, detail: 'Modelo Whisper listo y preparado' });
     }
-    return { segments, words };
+    return transcriber;
+  })();
+
+  try {
+    return await cachedTranscriberPromise;
+  } catch (err) {
+    cachedTranscriberPromise = null;
+    throw err;
+  }
+}
+
+export async function mediaToAudio16k(media, { onProgress } = {}) {
+  if (!media?.url) throw new Error('El medio no tiene una URL válida');
+  if (typeof onProgress === 'function') {
+    onProgress({ stage: 'audio', percent: 2, detail: 'Descargando audio del clip…' });
+  }
+  const res = await fetch(media.url);
+  if (!res.ok) throw new Error(`No se pudo leer el archivo de medios (HTTP ${res.status})`);
+  const arr = await res.arrayBuffer();
+
+  if (typeof onProgress === 'function') {
+    onProgress({ stage: 'audio', percent: 5, detail: 'Decodificando pista de audio…' });
+  }
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  let decoded;
+  try {
+    decoded = await audioCtx.decodeAudioData(arr);
+  } catch (err) {
+    audioCtx.close();
+    throw new Error('No se pudo decodificar el audio o el vídeo no contiene pista de audio');
+  }
+  audioCtx.close();
+
+  if (!decoded || decoded.numberOfChannels === 0 || decoded.length === 0) {
+    throw new Error('El vídeo no contiene pistas de audio audibles');
+  }
+
+  const targetSampleRate = 16000;
+  if (decoded.sampleRate === targetSampleRate) {
+    return {
+      audio: decoded.getChannelData(0),
+      sampleRate: targetSampleRate,
+      duration: decoded.duration,
+    };
+  }
+
+  if (typeof onProgress === 'function') {
+    onProgress({ stage: 'audio', percent: 8, detail: 'Ajustando frecuencia a 16 kHz para IA…' });
+  }
+  const targetLength = Math.max(1, Math.ceil(decoded.duration * targetSampleRate));
+  const offlineCtx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, targetLength, targetSampleRate);
+  const source = offlineCtx.createBufferSource();
+  source.buffer = decoded;
+  source.connect(offlineCtx.destination);
+  source.start(0);
+  const resampled = await offlineCtx.startRendering();
+  return {
+    audio: resampled.getChannelData(0),
+    sampleRate: targetSampleRate,
+    duration: decoded.duration,
+  };
+}
+
+export async function transcribeWithTransformers(media, options = {}) {
+  const onProgress = typeof options === 'function' ? options : options.onProgress;
+  const language = options.language || 'es';
+  const signal = options.signal;
+
+  if (!media?.url) return null;
+
+  try {
+    const transcriber = await ensureWhisperPipeline({ onProgress, signal });
+    if (signal?.aborted) throw new Error('Operación cancelada');
+
+    const { audio, sampleRate, duration } = await mediaToAudio16k(media, { onProgress });
+    if (signal?.aborted) throw new Error('Operación cancelada');
+
+    const progressTracker = new TranscriptionProgressTracker(onProgress, duration);
+
+    try {
+      const pipeOptions = {
+        sampling_rate: 16000,
+        chunk_length_s: 30,
+        stride_length_s: 5,
+        return_timestamps: 'word',
+        chunk_callback: (chunk) => {
+          if (signal?.aborted) throw new Error('Operación cancelada');
+          progressTracker.handleChunk(chunk);
+        },
+      };
+
+      if (language && language !== 'auto') {
+        pipeOptions.language = language;
+        pipeOptions.task = 'transcribe';
+      }
+
+      const result = await transcriber(audio, pipeOptions);
+      if (signal?.aborted) throw new Error('Operación cancelada');
+
+      progressTracker.finish();
+
+      const chunks = result?.chunks || (result?.text ? [{ text: result.text, timestamp: [0, duration || 5] }] : []);
+      const segments = [];
+      const words = [];
+
+      for (const c of chunks) {
+        let [s, e] = c.timestamp || [0, duration || 5];
+        s = Math.max(0, Number(s) || 0);
+        e = Number.isFinite(e) ? Math.min(duration || 9999, e) : (s + 2.5);
+        const text = (c.text || '').trim();
+        if (!text) continue;
+        segments.push({ start: s, end: Math.max(s + 0.4, e), text });
+        const ws = text.split(/\s+/);
+        const dur = Math.max(0.1, e - s);
+        ws.forEach((w, i) => words.push({
+          word: w,
+          start: Number((s + (dur * i / ws.length)).toFixed(2)),
+          end: Number((s + (dur * (i + 1) / ws.length)).toFixed(2)),
+        }));
+      }
+
+      if (Array.isArray(result?.words)) {
+        words.length = 0;
+        for (const w of result.words) {
+          words.push({
+            word: (w.word || w.text || '').trim(),
+            start: Number((w.start ?? w.timestamp?.[0] ?? 0).toFixed(2)),
+            end: Number((w.end ?? w.timestamp?.[1] ?? 0.5).toFixed(2)),
+          });
+        }
+      }
+
+      return { segments, words, text: result?.text || '' };
+    } finally {
+      progressTracker.destroy();
+    }
   } catch (e) {
+    if (signal?.aborted || e?.message === 'Operación cancelada') {
+      throw e;
+    }
     console.warn('transcribeWithTransformers:', e);
     return null;
   }
+}
+
+export async function generateSubtitlesForVideo({
+  media,
+  language = 'es',
+  captionStyle = 'clean',
+  replace = true,
+  onProgress,
+  signal,
+} = {}) {
+  const result = await transcribeMedia(media, onProgress, { language, signal });
+  if (!result || !result.segments || !result.segments.length) {
+    throw new Error('No se detectó voz ni diálogos en el archivo de audio');
+  }
+
+  const added = addSubtitleClips(result.segments.map((s) => {
+    const wordsForClip = (result.words || []).filter((w) => w.start >= s.start - 0.05 && w.start < s.end + 0.05);
+    return {
+      text: s.text,
+      start: s.start,
+      duration: Math.max(0.4, s.end - s.start),
+      words: wordsForClip.length ? wordsForClip : undefined,
+    };
+  }), { captionStyleId: captionStyle, replace });
+
+  return { count: added.length, clips: added };
 }
 
 // ---------- Ejecución del plan ----------
@@ -552,27 +890,31 @@ function applyTransitions(style) {
 }
 
 async function addSubtitles(lang) {
-  // Solo para vídeos: transcripción real si hay endpoint Whisper configurado (estilo Drift),
-  // si no, marcadores editables por escena.
   const videoMedia = Array.from(state.media.values()).find((m) => m.kind === 'video');
   if (!videoMedia) { toast('No hay vídeo para subtítular', 'warn'); return; }
   const track = state.project.tracks.find((t) => t.type === 'text') || state.project.tracks[0];
-  const segs = await transcribeMedia(videoMedia, (m) => toast(m, 'info'));
-  if (segs && segs.segments?.length) {
-    for (const s of segs.segments) {
-      const wordsForClip = (segs.words || []).filter((w) => w.start >= s.start - 0.05 && w.start < s.end + 0.05);
-      addTextClip(s.text, { start: Math.max(0, s.start), duration: Math.max(0.5, (s.end - s.start) || 2), size: 42, weight: 700, color: '#ffffff', trackId: track.id, words: wordsForClip.length ? wordsForClip : undefined });
+  try {
+    const res = await generateSubtitlesForVideo({
+      media: videoMedia,
+      language: lang || 'es',
+      replace: false,
+      onProgress: (info) => {
+        if (info.percent % 25 === 0 || info.percent === 100) {
+          toast(`${info.detail || 'Generando subtítulos'} (${info.percent}%)`, 'info', 1400);
+        }
+      },
+    });
+    toast(`Subtítulos generados (${res.count})`, 'success');
+  } catch (err) {
+    console.warn('generateSubtitlesForVideo falló en plan:', err);
+    const scenes = videoMedia.scenes && videoMedia.scenes.length ? videoMedia.scenes : [0, videoMedia.duration];
+    for (let i = 0; i < scenes.length - 1; i++) {
+      const s = scenes[i], e = scenes[i + 1];
+      if (e - s < 0.8) continue;
+      addTextClip(`Subtítulo ${i + 1}`, { start: s, duration: Math.min(e - s, 4), size: 42, weight: 700, color: '#ffffff', trackId: track.id });
     }
-    toast(`Subtítulos generados (${segs.segments.length})`, 'success');
-    return;
+    toast('Subtítulos por escenas aplicados', 'info');
   }
-  const scenes = videoMedia.scenes && videoMedia.scenes.length ? videoMedia.scenes : [0, videoMedia.duration];
-  for (let i = 0; i < scenes.length - 1; i++) {
-    const s = scenes[i], e = scenes[i + 1];
-    if (e - s < 0.8) continue;
-    addTextClip(`Subtítulo ${i + 1}`, { start: s, duration: Math.min(e - s, 4), size: 42, weight: 700, color: '#ffffff', trackId: track.id });
-  }
-  toast('Subtítulos por escenas (configura Whisper en Ajustes para transcripción real)', 'info');
 }
 
 export function undoAutoEdit() {

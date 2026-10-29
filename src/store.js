@@ -1,6 +1,7 @@
 import { db } from './db.js';
 import { clamp, uid, debounce, toast, formatTime } from './utils.js';
 import { CAPCUT_FILTERS, CAPCUT_FILTER_CATEGORIES } from './filter-catalog.js';
+import { CAPTION_STYLES } from './library.js';
 
 export { CAPCUT_FILTER_CATEGORIES };
 
@@ -636,7 +637,7 @@ export function addTextClip(content = 'Tu texto aquí', options = {}) {
     fadeOut: 0,
     text,
   };
-  mutate(() => {
+  const addToTrack = () => {
     if (newTrack) {
       const textTracks = state.project.tracks.filter((item) => item.type === 'text');
       const anchor = textTracks[textTracks.length - 1];
@@ -644,9 +645,97 @@ export function addTextClip(content = 'Tu texto aquí', options = {}) {
       state.project.tracks.splice(index, 0, newTrack);
     }
     track.clips.push(clip);
-  });
+  };
+  if (options.history === false) {
+    addToTrack();
+  } else {
+    mutate(addToTrack);
+  }
   selectClip(clip.id);
   return clip;
+}
+
+export function addSubtitleClips(items, { captionStyleId = 'clean', replace = false } = {}) {
+  if (!state.project || !items || !items.length) return [];
+  const style = CAPTION_STYLES.find((item) => item.id === captionStyleId) || CAPTION_STYLES[0];
+  let track = state.project.tracks.find((item) => item.type === 'text');
+  if (!track) {
+    track = {
+      id: uid('track'),
+      type: 'text',
+      name: 'Subtítulos',
+      clips: [],
+    };
+    state.project.tracks.push(track);
+  }
+
+  const added = [];
+  mutate(() => {
+    if (replace) {
+      track.clips = track.clips.filter((c) => c.kind !== 'text');
+    }
+    for (const item of items) {
+      const content = String(item.text || '').trim();
+      if (!content) continue;
+      const start = Math.max(0, Number(item.start) || 0);
+      const duration = Math.max(0.4, Number(item.duration || (item.end - item.start)) || 2);
+      const text = {
+        ...TEXT_DEFAULTS,
+        content,
+        size: style.size ?? 56,
+        weight: style.weight ?? 600,
+        color: style.color ?? '#ffffff',
+        background: style.background ?? 'transparent',
+        shadow: style.shadow ?? true,
+        highlight: style.highlight ?? '',
+        align: 'center',
+        y: 28,
+      };
+      if (item.words && item.words.length) {
+        text.words = item.words;
+      }
+      const clip = {
+        id: uid('clip'),
+        kind: 'text',
+        mediaId: null,
+        name: content.slice(0, 24),
+        start,
+        duration,
+        in: 0,
+        speed: 1,
+        volume: 1,
+        opacity: 1,
+        scale: 1,
+        x: 0,
+        y: 0,
+        filter: 'none',
+        adjust: { brightness: 100, contrast: 100, saturate: 100 },
+        fadeIn: 0,
+        fadeOut: 0,
+        text,
+      };
+      track.clips.push(clip);
+      added.push(clip);
+    }
+  });
+
+  if (added.length) {
+    selectClip(added[0].id);
+  }
+  return added;
+}
+
+export function clearSubtitleClips() {
+  if (!state.project) return 0;
+  let track = state.project.tracks.find((item) => item.type === 'text');
+  if (!track) return 0;
+  const count = track.clips.filter((c) => c.kind === 'text').length;
+  if (!count) return 0;
+  mutate(() => {
+    track.clips = track.clips.filter((c) => c.kind !== 'text');
+    state.selection = null;
+  });
+  return count;
 }
 
 export function addStickerClip(content = '✨', options = {}) {

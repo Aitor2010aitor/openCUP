@@ -371,8 +371,8 @@ export function mountPreview(host) {
       lastCanvasHeight = pixelHeight;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderFrame(ctx, rect.width, rect.height, state.project, pool, state.playhead);
     pool.syncPlayback(state.project, state.playhead, state.playing, muted);
+    renderFrame(ctx, rect.width, rect.height, state.project, pool, state.playhead);
     updateOverlay();
   }
 

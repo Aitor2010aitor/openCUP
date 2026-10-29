@@ -270,6 +270,7 @@ export class MediaPool {
     video.muted = true;
     video.playsInline = true;
     video.addEventListener('loadeddata', () => this.onReady?.());
+    video.addEventListener('seeked', () => this.onReady?.());
     this.videos.set(clip.id, video);
     return video;
   }

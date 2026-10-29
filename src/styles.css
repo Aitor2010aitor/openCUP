@@ -1088,6 +1088,83 @@ button.ai-card:hover { background: #122326; border-color: #243638; }
 .caption-style span { border-radius: 3px; padding: 1px 5px; line-height: 1.2; }
 .caption-style:hover { border-color: #5a5a5a; }
 .caption-style.active { border-color: var(--accent-2); background: #243335; }
+.caption-ai-banner {
+  margin: 6px 10px 10px;
+  border: 1px solid #383838;
+  border-radius: 6px;
+  background: #252525;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.caption-ai-banner.is-ready {
+  border-color: #1a5157;
+  background: linear-gradient(135deg, #0e2e33, #0b2226);
+}
+.caption-ai-banner-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.caption-ai-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #c9c9c9;
+}
+.caption-ai-banner.is-ready .caption-ai-tag {
+  color: #72f2fa;
+}
+.caption-ai-banner-desc {
+  font-size: 9.5px;
+  color: #8c8c8c;
+  line-height: 1.4;
+}
+.caption-ai-banner.is-ready .caption-ai-banner-desc {
+  color: #8bbdc2;
+}
+
+.subs-notice {
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #383838;
+  background: #282828;
+}
+.subs-notice.is-ready {
+  border-color: #1c555c;
+  background: #0f3036;
+  color: #a4f2f8;
+}
+.subs-notice.is-pending {
+  border-color: #443c24;
+  background: #262215;
+  color: #ffe38f;
+}
+
+.subs-step.active {
+  border-color: var(--accent-2) !important;
+  background: #19383c !important;
+}
+.subs-step.active .subs-step-num {
+  background: var(--accent-2) !important;
+  color: #000 !important;
+}
+.subs-step.completed {
+  border-color: #2b6159 !important;
+  background: #15332e !important;
+}
+.subs-step.completed .subs-step-num {
+  background: #00e5a3 !important;
+  color: #000 !important;
+}
+
+.subs-progress-card {
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+}
 .caption-actions { display: flex; flex-direction: column; gap: 7px; padding: 0 10px 12px; }
 .caption-list-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 12px 7px; font-size: 10px; color: #9a9a9a; text-transform: uppercase; letter-spacing: 0.05em; }
 .caption-list-head b { color: #d8d8d8; font-weight: 600; }
