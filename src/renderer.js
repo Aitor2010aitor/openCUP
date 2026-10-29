@@ -1916,6 +1916,40 @@ function drawTextLayer(ctx, layer, width, height, options = {}) {
   }
 
   paintTextBlock(ctx, text, metrics, blockWidth, startY, revealInfo);
+
+  // Karaoke: resalta en amarillo la palabra activa si hay tiempos por palabra.
+  if (Array.isArray(text.words) && text.words.length) {
+    const sourceTime = (clip.in || 0) + local * (clip.speed || 1);
+    const active = text.words.find((w) => sourceTime >= (w.start || 0) && sourceTime < (w.end || w.start + 0.5));
+    if (active && active.word) {
+      const target = String(active.word);
+      let lineIndex = -1;
+      for (let i = 0; i < metrics.lines.length; i++) {
+        if (metrics.lines[i].toLowerCase().includes(target.toLowerCase())) { lineIndex = i; break; }
+      }
+      if (lineIndex >= 0) {
+        const line = metrics.lines[lineIndex];
+        const wordsInLine = line.split(/\s+/);
+        const idx = wordsInLine.findIndex((w) => w.toLowerCase() === target.toLowerCase() || w.toLowerCase().includes(target.toLowerCase()));
+        if (idx >= 0) {
+          const prefix = wordsInLine.slice(0, idx).join(' ');
+          const prefixWidth = prefix ? measureRun(ctx, prefix + ' ', metrics.letterSpacing) : 0;
+          const wordWidth = measureRun(ctx, wordsInLine[idx], metrics.letterSpacing);
+          const lineWidth = measureRun(ctx, line, metrics.letterSpacing);
+          const align = text.align === 'left' ? 'left' : text.align === 'right' ? 'right' : 'center';
+          const startX = align === 'left' ? -blockWidth / 2 : align === 'right' ? blockWidth / 2 - lineWidth : -lineWidth / 2;
+          const baselineY = startY + lineIndex * metrics.lineHeight;
+          ctx.save();
+          ctx.fillStyle = '#ffeb3b';
+          ctx.shadowColor = 'rgba(0,0,0,0.6)';
+          ctx.shadowBlur = metrics.fontSize * 0.12;
+          ctx.fillText(wordsInLine[idx], startX + prefixWidth, baselineY);
+          ctx.restore();
+        }
+      }
+    }
+  }
+
   ctx.restore();
 }
 

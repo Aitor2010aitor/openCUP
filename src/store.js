@@ -607,6 +607,7 @@ export function addTextClip(content = 'Tu texto aquí', options = {}) {
     background: preset.background ?? style.background,
   };
   if (preset.radius !== undefined) text.backgroundRadius = preset.radius;
+  if (options.words) text.words = options.words;
   const clip = {
     id: uid('clip'),
     kind: 'text',

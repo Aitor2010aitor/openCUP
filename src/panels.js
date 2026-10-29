@@ -918,6 +918,7 @@ export function mountLeftPanel(host) {
       <div class="caption-actions">
         <button class="btn btn-primary btn-block" data-add-subtitle>${icon('plus', 14)} Añadir subtítulo en el cursor</button>
         <button class="btn btn-block" data-import-srt>${icon('upload', 14)} Importar archivo .srt</button>
+        <button class="btn btn-block" data-gen-subs>${icon('sparkles', 14)} Generar subtítulos con IA</button>
       </div>
       ${textClips.length ? `
         <div class="caption-list-head">Subtítulos en la línea de tiempo <b>${textClips.length}</b></div>
@@ -1539,6 +1540,24 @@ export function mountLeftPanel(host) {
 
     const srt = event.target.closest('[data-import-srt]');
     if (srt) { pickFiles('srt', '.srt,text/plain', false); return; }
+
+    const genSubs = event.target.closest('[data-gen-subs]');
+    if (genSubs) {
+      if (!state.project) return;
+      const video = Array.from(state.media.values()).find((m) => m.kind === 'video');
+      if (!video) { toast('Importa un vídeo primero', 'warn'); return; }
+      toast('Generando subtítulos… (puede tardar)', 'info');
+      (async () => {
+        try {
+          const { analyzeProject, planEdit, applyPlan } = await import('./auto-edit.js');
+          const analysis = await analyzeProject();
+          const plan = await planEdit('añade subtítulos automáticos en español sincronizados', analysis);
+          await applyPlan(plan, (i, t, op) => {});
+          toast('Subtítulos generados', 'success');
+        } catch (e) { toast('Error: ' + e.message, 'error'); }
+      })();
+      return;
+    }
 
     const avatar = event.target.closest('[data-avatar-upload]');
     if (avatar) { pickFiles('avatar', 'image/*', false); return; }

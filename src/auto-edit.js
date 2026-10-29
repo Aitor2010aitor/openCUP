@@ -189,29 +189,39 @@ function rmsOf(buf) {
   return Math.sqrt(s / ch.length);
 }
 
-export async function transcribeMedia(media) {
+export async function transcribeMedia(media, onProgress) {
   const cfg = getLlmConfig();
-  if (!cfg.whisperUrl || !media?.url) return null;
-  try {
-    const res = await fetch(media.url);
-    const blob = await res.blob();
-    const form = new FormData();
-    form.append('file', blob, media.name || 'audio.webm');
-    if (cfg.whisperLanguage) form.append('language', cfg.whisperLanguage);
-    const r = await fetch(cfg.whisperUrl.replace(/\/$/, ''), { method: 'POST', body: form });
-    if (!r.ok) return null;
-    const d = await r.json();
-    if (Array.isArray(d.segments)) return d.segments.map((s) => ({ start: s.start, end: s.end, text: (s.text || '').trim() })).filter((s) => s.text);
-    if (Array.isArray(d.subtitles)) return d.subtitles.map((s) => ({ start: s.start, end: s.end, text: (s.text || '').trim() })).filter((s) => s.text);
-    if (typeof d.text === 'string' && d.text.trim()) {
-      // sin tiempos: un solo subtítulo a lo largo del vídeo
-      return [{ start: 0, end: media.duration || 5, text: d.text.trim() }];
-    }
-    return null;
-  } catch (e) {
-    console.warn('transcribeMedia:', e);
-    return null;
+  if (cfg.whisperUrl && media?.url) {
+    try {
+      const res = await fetch(media.url);
+      const blob = await res.blob();
+      const form = new FormData();
+      form.append('file', blob, media.name || 'audio.webm');
+      if (cfg.whisperLanguage) form.append('language', cfg.whisperLanguage);
+      const r = await fetch(cfg.whisperUrl.replace(/\/$/, ''), { method: 'POST', body: form });
+      if (r.ok) {
+        const d = await r.json();
+        let segments = null;
+        let words = [];
+        if (Array.isArray(d.segments)) {
+          segments = d.segments.map((s) => ({ start: s.start, end: s.end, text: (s.text || '').trim() })).filter((s) => s.text);
+          for (const s of d.segments) if (Array.isArray(s.words)) for (const w of s.words) words.push({ word: (w.word || w.text || '').trim(), start: w.start, end: w.end });
+        } else if (Array.isArray(d.subtitles)) {
+          segments = d.subtitles.map((s) => ({ start: s.start, end: s.end, text: (s.text || '').trim() })).filter((s) => s.text);
+          for (const s of d.subtitles) if (Array.isArray(s.words)) for (const w of s.words) words.push({ word: (w.word || w.text || '').trim(), start: w.start, end: w.end });
+        } else if (typeof d.text === 'string' && d.text.trim()) {
+          segments = [{ start: 0, end: media.duration || 5, text: d.text.trim() }];
+        }
+        if (segments) {
+          if (!words.length) for (const s of segments) { const ws = s.text.split(/\s+/); const dur = Math.max(0.1, s.end - s.start); ws.forEach((w, i) => words.push({ word: w, start: s.start + (dur * i / ws.length), end: s.start + (dur * (i + 1) / ws.length) })); }
+          return { segments, words };
+        }
+      }
+    } catch (e) { console.warn('transcribeMedia (endpoint):', e); }
   }
+  const t = await transcribeWithTransformers(media, onProgress);
+  if (t) return t;
+  return null;
 }
 // Convierte instrucción + análisis en un plan de operaciones estructuradas.
 export async function planEdit(instruction, analysis) {
@@ -344,6 +354,40 @@ async function parseIntent(instruction, analysis) {
     reframe: /seguimiento|tracking|reframe|reencuadre/.test(t),
     silenceRemoval: /silencio|silence|pausa/.test(t),
   };
+}
+
+export async function transcribeWithTransformers(media, onProgress) {
+  if (!media?.url) return null;
+  try {
+    const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+    onProgress && onProgress('Descargando modelo Whisper (primera vez, ~40 MB)...');
+    const transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
+      progress_callback: (p) => onProgress && onProgress((p.status || 'cargando') + ' ' + (p.progress ? p.progress.toFixed(0) + '%' : '')),
+    });
+    onProgress && onProgress('Transcribiendo...');
+    const buf = await mediaToAudioBuffer(media);
+    const result = await transcriber(buf.getChannelData(0), { sampling_rate: buf.sampleRate, chunk_length_s: 30, stride_length_s: 5, return_timestamps: 'word' });
+    const chunks = result?.chunks || (result?.text ? [{ text: result.text, timestamp: [0, media.duration || 5] }] : []);
+    const segments = [];
+    const words = [];
+    for (const c of chunks) {
+      const [s, e] = c.timestamp || [0, media.duration || 5];
+      const t = (c.text || '').trim();
+      if (!t) continue;
+      segments.push({ start: s, end: e, text: t });
+      const ws = t.split(/\s+/);
+      const dur = Math.max(0.1, e - s);
+      ws.forEach((w, i) => words.push({ word: w, start: s + (dur * i / ws.length), end: s + (dur * (i + 1) / ws.length) }));
+    }
+    if (Array.isArray(result?.words)) {
+      words.length = 0;
+      for (const w of result.words) words.push({ word: (w.word || w.text || '').trim(), start: w.start ?? w.timestamp?.[0], end: w.end ?? w.timestamp?.[1] });
+    }
+    return { segments, words };
+  } catch (e) {
+    console.warn('transcribeWithTransformers:', e);
+    return null;
+  }
 }
 
 // ---------- Ejecución del plan ----------
@@ -513,12 +557,13 @@ async function addSubtitles(lang) {
   const videoMedia = Array.from(state.media.values()).find((m) => m.kind === 'video');
   if (!videoMedia) { toast('No hay vídeo para subtítular', 'warn'); return; }
   const track = state.project.tracks.find((t) => t.type === 'text') || state.project.tracks[0];
-  const segs = await transcribeMedia(videoMedia);
-  if (segs && segs.length) {
-    for (const s of segs) {
-      addTextClip(s.text, { start: Math.max(0, s.start), duration: Math.max(0.5, (s.end - s.start) || 2), size: 42, weight: 700, color: '#ffffff', trackId: track.id });
+  const segs = await transcribeMedia(videoMedia, (m) => toast(m, 'info'));
+  if (segs && segs.segments?.length) {
+    for (const s of segs.segments) {
+      const wordsForClip = (segs.words || []).filter((w) => w.start >= s.start - 0.05 && w.start < s.end + 0.05);
+      addTextClip(s.text, { start: Math.max(0, s.start), duration: Math.max(0.5, (s.end - s.start) || 2), size: 42, weight: 700, color: '#ffffff', trackId: track.id, words: wordsForClip.length ? wordsForClip : undefined });
     }
-    toast(`Subtítulos generados por transcripción (${segs.length})`, 'success');
+    toast(`Subtítulos generados (${segs.segments.length})`, 'success');
     return;
   }
   const scenes = videoMedia.scenes && videoMedia.scenes.length ? videoMedia.scenes : [0, videoMedia.duration];
