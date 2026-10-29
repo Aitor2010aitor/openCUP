@@ -43,7 +43,7 @@ const shot = async (name) => {
 };
 
 const selectedText = () => page.evaluate(() => {
-  const state = window.cacup.state;
+  const state = window.openCUP.state;
   const clip = state.project.tracks
     .flatMap((track) => track.clips)
     .find((item) => item.id === state.selection);
@@ -51,7 +51,7 @@ const selectedText = () => page.evaluate(() => {
 });
 
 const selectedClip = () => page.evaluate(() => {
-  const state = window.cacup.state;
+  const state = window.openCUP.state;
   return state.project.tracks
     .flatMap((track) => track.clips)
     .find((item) => item.id === state.selection) || null;
@@ -98,9 +98,9 @@ const number = (selector, value) => page.evaluate(({ selector: query, value: nex
 
 try {
   await page.goto(BASE, { waitUntil: 'networkidle0' });
-  await page.evaluate(() => window.cacup.command('newProject', { name: 'Panel de texto' }));
+  await page.evaluate(() => window.openCUP.command('newProject', { name: 'Panel de texto' }));
   await page.waitForSelector('.editor');
-  await page.waitForFunction(() => window.cacup?.state?.project?.id);
+  await page.waitForFunction(() => window.openCUP?.state?.project?.id);
   await page.click('[data-panel="text"]');
   await sleep(250);
 
@@ -128,7 +128,7 @@ try {
   await sleep(250);
   text = await selectedText();
   check(text?.color === '#b6fdff' && text?.glow === true && Math.abs(text.strokeWidth - 0.025) < 0.0001, 'un estilo del catálogo aplica color, brillo y trazo', JSON.stringify(text && { color: text.color, glow: text.glow, strokeWidth: text.strokeWidth }));
-  const chosenId = await page.evaluate(() => window.cacup.state.selection);
+  const chosenId = await page.evaluate(() => window.openCUP.state.selection);
 
   await page.click('[data-text-subtab="bubble"]');
   await sleep(200);
@@ -182,7 +182,7 @@ try {
 
   await page.click('[data-text-tab="text"]');
   await sleep(250);
-  await page.evaluate((id) => window.cacup.command('selectClip', { id }), chosenId);
+  await page.evaluate((id) => window.openCUP.command('selectClip', { id }), chosenId);
   await sleep(250);
   check((await selectedClip())?.id === chosenId, 'el texto sigue seleccionado al volver a Texto');
 
@@ -322,7 +322,7 @@ try {
       opacity: 1,
       filter: 'none',
       text: {
-        content: 'CACUP',
+        content: 'openCUP',
         size: 96,
         weight: 900,
         color: '#ffffff',

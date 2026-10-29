@@ -121,7 +121,7 @@ function panelEmpty(title, text, iconName = 'layers') {
 let filterSearch = '';
 let effectSearch = '';
 let stickerSearch = '';
-const CUSTOM_ADJUST_KEY = 'cacup.adjust.presets';
+const CUSTOM_ADJUST_KEY = 'openCUP.adjust.presets';
 
 function loadCustomAdjusts() {
   try {
@@ -740,14 +740,14 @@ export function mountLeftPanel(host) {
       <div class="text-track-hero">
         <span class="text-track-art">${icon('text', 30)}</span>
         <strong>Seguimiento de movimiento</strong>
-        <p>El seguimiento de CapCut analiza el video en la nube para pegar el texto a una persona u objeto. Cacup es un editor local y no incluye ese análisis.</p>
+        <p>El seguimiento de CapCut analiza el video en la nube para pegar el texto a una persona u objeto. openCUP es un editor local y no incluye ese análisis.</p>
       </div>
       <div class="text-info-card">
         <strong>Alternativa sin conexión</strong>
         <p>Puedes mover el texto manualmente en el preview y ajustar la posición con fotogramas clave en la línea de tiempo. El resultado se mantiene editable y se exporta igual.</p>
         <button class="btn btn-block" data-add-text>${icon('plus', 14)} Añadir texto y colocarlo a mano</button>
       </div>
-      <div class="text-info-card muted-card">La detección automática de caras, objetos y puntos de seguimiento necesita un servicio externo. No se envía ningún archivo desde Cacup.</div>`;
+      <div class="text-info-card muted-card">La detección automática de caras, objetos y puntos de seguimiento necesita un servicio externo. No se envía ningún archivo desde openCUP.</div>`;
   }
 
   function ttsVoiceOptions() {
@@ -762,7 +762,7 @@ export function mountLeftPanel(host) {
 
   function textToSpeechPanel() {
     const clip = activeTextClip();
-    const sample = clip?.text?.content || 'Hola, esta es una vista previa de la voz de Cacup.';
+    const sample = clip?.text?.content || 'Hola, esta es una vista previa de la voz de openCUP.';
     return `
       <div class="text-panel-hint">Vista previa con las voces instaladas en Windows. El audio no se añade a la línea de tiempo.</div>
       <div class="text-tts-form">
@@ -791,7 +791,7 @@ export function mountLeftPanel(host) {
         <button class="btn btn-ghost btn-block" data-tts-use-text>${icon('text', 13)} Usar el texto seleccionado</button>
       </div>
       <div class="text-info-card">${icon('mic', 14)} <strong>Voces locales</strong><p>Se usan las voces de Windows mediante <code>speechSynthesis</code>. Si no aparece ninguna voz en la lista, instala un paquete de voz en Configuración → Hora e idioma → Voz.</p></div>
-      <div class="text-info-card muted-card">La generación de voz con IA y la clonación de voz necesitan conexión. No están disponibles en Cacup sin conexión.</div>`;
+      <div class="text-info-card muted-card">La generación de voz con IA y la clonación de voz necesitan conexión. No están disponibles en openCUP sin conexión.</div>`;
   }
 
   function textPanel() {
@@ -1204,7 +1204,7 @@ export function mountLeftPanel(host) {
         openModal({
           title: 'Ajustes',
           width: 430,
-          body: `<div class="modal-note" style="margin:0">Cacup funciona sin cuenta. Los proyectos y medios se guardan en el almacenamiento local de este navegador.</div>`,
+          body: `<div class="modal-note" style="margin:0">openCUP funciona sin cuenta. Los proyectos y medios se guardan en el almacenamiento local de este navegador.</div>`,
           footer: `<button class="btn btn-primary" data-close-settings>Listo</button>`,
           onMount(modal) {
             modal.foot.querySelector('[data-close-settings]').addEventListener('click', modal.close);
@@ -1246,7 +1246,7 @@ export function mountLeftPanel(host) {
     if (aiTool) {
       unavailable(
         `${aiTool.textContent} con IA`,
-        'La generación con IA necesita un servicio en la nube. Cacup es un editor local y no incluye estas herramientas; puedes importar tus propios medios o usar las plantillas y los stickers.',
+        'La generación con IA necesita un servicio en la nube. openCUP es un editor local y no incluye estas herramientas; puedes importar tus propios medios o usar las plantillas y los stickers.',
       );
       return;
     }
@@ -1256,7 +1256,7 @@ export function mountLeftPanel(host) {
       return;
     }
     if (event.target.closest('[data-space-info]')) {
-      unavailable('Espacios', 'Un espacio es una carpeta compartida para trabajar con otras personas. Cacup no tiene cuentas ni colaboración: todo se queda en este equipo.');
+      unavailable('Espacios', 'Un espacio es una carpeta compartida para trabajar con otras personas. openCUP no tiene cuentas ni colaboración: todo se queda en este equipo.');
       return;
     }
     if (event.target.closest('[data-library-media]')) {
@@ -1641,7 +1641,7 @@ export function mountLeftPanel(host) {
     const card = event.target.closest('[data-media-id]');
     if (!card) return;
     event.dataTransfer.effectAllowed = 'copy';
-    event.dataTransfer.setData('application/x-cacup-media', card.dataset.mediaId);
+    event.dataTransfer.setData('application/x-openCUP-media', card.dataset.mediaId);
     event.dataTransfer.setData('text/plain', card.dataset.mediaId);
   });
 
@@ -1962,7 +1962,7 @@ export function mountDetailsPanel(host) {
     return `
       <div class="detail-list project-detail-list">
         <div class="detail-item"><span class="d-label">Nombre:</span><span class="d-value strong" title="${escapeHtml(project.name)}">${escapeHtml(project.name)}</span></div>
-        <div class="detail-item"><span class="d-label">Ruta:</span><span class="d-value path" title="Cacup / Proyectos / ${escapeHtml(project.name)}">Cacup / Proyectos / ${escapeHtml(project.name)}</span></div>
+        <div class="detail-item"><span class="d-label">Ruta:</span><span class="d-value path" title="openCUP / Proyectos / ${escapeHtml(project.name)}">openCUP / Proyectos / ${escapeHtml(project.name)}</span></div>
         <div class="detail-item"><span class="d-label">Archivos multimedia importados:</span><span class="d-value">Mantener en la ubicación original</span></div>
         <div class="detail-item"><span class="d-label">Disposición de capas: <i class="d-info" title="Las capas se apilan en el orden de las pistas">${icon('info', 11)}</i></span><span class="d-value">Activado</span></div>
         <div class="detail-item"><span class="d-label">Proxy: <i class="d-info" title="Los archivos proxy agilizan la reproducción de videos pesados">${icon('info', 11)}</i></span><span class="d-value">Desactivado</span></div>

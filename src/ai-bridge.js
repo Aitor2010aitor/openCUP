@@ -35,7 +35,7 @@ import { listCapCutProjects, importCapCutProject } from './capcut.js';
 
 export const AI_ACTIONS = [
   { action: 'getState', description: 'Estado completo: proyecto, pistas, clips, medios, selección, cursor y panel.' },
-  { action: 'listProjects', description: 'Proyectos guardados en Cacup.' },
+  { action: 'listProjects', description: 'Proyectos guardados en openCUP.' },
   { action: 'newProject', params: { name: 'string' }, description: 'Crea un proyecto y abre el editor.' },
   { action: 'openProject', params: { id: 'string', name: 'string (alternativa)' }, description: 'Abre un proyecto guardado.' },
   { action: 'goHome', description: 'Vuelve al inicio.' },
@@ -72,7 +72,7 @@ const PANELS = ['media', 'audio', 'text', 'stickers', 'effects', 'transitions', 
 const clientStartedAt = Date.now();
 
 const clientId = (() => {
-  const key = 'cacup-ai-client';
+  const key = 'openCUP-ai-client';
   try {
     const saved = sessionStorage.getItem(key);
     if (saved) return saved;
@@ -540,7 +540,7 @@ function bridgeMarkup(status) {
   if (!status?.ok) {
     return `
       <div class="bridge-offline">${icon('alert', 22)}<strong>Puente no disponible</strong>
-        <span>${escapeHtml(status?.error || 'Inicia Cacup con node server.mjs.')}</span>
+        <span>${escapeHtml(status?.error || 'Inicia openCUP con node server.mjs.')}</span>
       </div>`;
   }
   const endpoint = `http://127.0.0.1:${status.port}`;
@@ -548,7 +548,7 @@ function bridgeMarkup(status) {
     <div class="bridge-hero">
       <div class="bridge-pulse"></div>
       <div class="bridge-hero-text">
-        <strong>Cacup AI Bridge</strong>
+        <strong>openCUP AI Bridge</strong>
         <span>${status.connected ? 'Aplicación conectada y escuchando órdenes' : 'Servidor activo · esperando a la aplicación'}</span>
       </div>
       <span class="bridge-badge">${status.connected ? 'CONECTADO' : 'ESPERANDO'}</span>
@@ -572,7 +572,7 @@ function bridgeMarkup(status) {
         <button class="btn btn-small" data-bridge-copy="token">${icon('copy', 13)} Copiar</button>
         <button class="btn btn-small" data-bridge-reveal title="Mostrar u ocultar">${icon('eye', 13)}</button>
       </div>
-      <span class="bridge-hint">Solo se escucha en 127.0.0.1. Guarda el token en la variable <code>CACUP_AI_TOKEN</code>.</span>
+      <span class="bridge-hint">Solo se escucha en 127.0.0.1. Guarda el token en la variable <code>openCUP_AI_TOKEN</code>.</span>
     </div>
     <div class="bridge-field">
       <label>Ejemplo para otra IA</label>
@@ -653,7 +653,7 @@ export async function openAiBridgeDialog() {
 }
 
 export function installAiBridgeApi() {
-  const api = window.cacup || {};
+  const api = window.openCUP || {};
   api.state = state;
   api.version = '0.3.0';
   api.command = (action, params) => localCommand(action, params);
@@ -663,5 +663,5 @@ export function installAiBridgeApi() {
   api.openBridge = openAiBridgeDialog;
   api.capcut = { list: listCapCutProjects, import: importCapCutProject };
   api.library = { filters: FILTERS, effects: EFFECTS, stickers: STICKERS, transitions: TRANSITIONS, avatars: AVATAR_PRESETS, textPresets: TEXT_PRESETS };
-  window.cacup = api;
+  window.openCUP = api;
 }

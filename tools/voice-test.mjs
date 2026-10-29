@@ -68,15 +68,15 @@ try {
 }
 await wait(500);
 const data = await page.evaluate(() => ({
-  panel: window.cacup.state.panel,
-  media: [...window.cacup.state.media.values()].map((item) => ({
+  panel: window.openCUP.state.panel,
+  media: [...window.openCUP.state.media.values()].map((item) => ({
     kind: item.kind,
     name: item.name,
     duration: item.duration,
     size: item.size,
     peaks: item.peaks?.length || 0,
   })),
-  audioClips: window.cacup.state.project.tracks.find((track) => track.type === 'audio')?.clips.map((clip) => ({
+  audioClips: window.openCUP.state.project.tracks.find((track) => track.type === 'audio')?.clips.map((clip) => ({
     kind: clip.kind,
     duration: clip.duration,
   })),

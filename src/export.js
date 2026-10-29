@@ -12,11 +12,11 @@ import { downloadBlob, toast } from './utils.js';
 import { fixWebmDuration } from './webm.js';
 
 export function sanitizeName(value) {
-  return String(value || 'cacup')
+  return String(value || 'openCUP')
     .replace(/[^\w\sáéíóúüñÁÉÍÓÚÜÑ-]/g, '')
     .trim()
     .replace(/\s+/g, '-')
-    .slice(0, 60) || 'cacup';
+    .slice(0, 60) || 'openCUP';
 }
 
 export function exportDimensions(project, resolutionKey = '1080p') {
@@ -295,7 +295,7 @@ export function openExportDialog() {
 
       startButton.addEventListener('click', async () => {
         if (exporting) return;
-        const name = instance.body.querySelector('[data-export-name]').value.trim() || 'Cacup';
+        const name = instance.body.querySelector('[data-export-name]').value.trim() || 'openCUP';
         const resolutionKey = instance.body.querySelector('[data-export-resolution]').value;
         const fps = Number(instance.body.querySelector('[data-export-fps]').value) || 30;
         const quality = instance.body.querySelector('[data-export-quality]').value;

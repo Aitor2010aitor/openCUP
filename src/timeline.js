@@ -454,7 +454,7 @@ export function mountTimeline(host) {
 
   const hasPayload = (event) => {
     const types = Array.from(event.dataTransfer?.types || []);
-    return types.includes('Files') || types.includes('application/x-cacup-media');
+    return types.includes('Files') || types.includes('application/x-openCUP-media');
   };
 
   tracksEl.addEventListener('dragover', (event) => {
@@ -481,7 +481,7 @@ export function mountTimeline(host) {
       toast('La pista está bloqueada', 'warning');
       return;
     }
-    const mediaId = event.dataTransfer.getData('application/x-cacup-media');
+    const mediaId = event.dataTransfer.getData('application/x-openCUP-media');
     if (mediaId) {
       const start = timeFromX(event.clientX);
       const clip = addMediaToTimeline(mediaId, { trackId: track?.id, start });

@@ -1,5 +1,5 @@
 param(
-  [string]$Out = "C:\Users\aitor\Desktop\cacup\build\cacup.ico"
+  [string]$Out = "C:\Users\aitor\Desktop\openCUP\build\openCUP.ico"
 )
 
 Add-Type -AssemblyName System.Drawing

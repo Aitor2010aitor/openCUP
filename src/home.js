@@ -57,7 +57,7 @@ const SHOWCASES = [
     title: 'Plantillas destacadas',
     subtitle: 'Composiciones listas para tu historia',
     art: 'linear-gradient(120deg,#2a163e 0%,#7b3fa8 46%,#f0a6ff 60%,#2d1a44 100%)',
-    mark: '<span class="art-word">Cacup</span>',
+    mark: '<span class="art-word">openCUP</span>',
     caption: 'Empieza con una plantilla',
   },
 ];
@@ -286,11 +286,11 @@ function openSettingsModal() {
 
 function openProModal() {
   openModal({
-    title: 'Cacup Pro',
+    title: 'openCUP Pro',
     width: 440,
     body: `
       <div style="font-size:12px;line-height:1.6;color:#c7c7c7;margin-bottom:12px">
-        Cacup es un editor local y gratuito. No hay cuentas, anuncios ni límites de exportación.
+        openCUP es un editor local y gratuito. No hay cuentas, anuncios ni límites de exportación.
       </div>
       <div class="modal-note">
         Todas las funciones de esta versión están disponibles sin suscripción. Tus archivos nunca salen de tu equipo.
@@ -306,7 +306,7 @@ function openNotificationsModal() {
   openModal({
     title: 'Notificaciones',
     width: 420,
-    body: `<div class="panel-empty" style="padding:28px 14px">${icon('bell', 30)}<strong>Estás al día</strong>No hay notificaciones nuevas. Cacup funciona sin conexión.</div>`,
+    body: `<div class="panel-empty" style="padding:28px 14px">${icon('bell', 30)}<strong>Estás al día</strong>No hay notificaciones nuevas. openCUP funciona sin conexión.</div>`,
     footer: `<button class="btn btn-primary" data-notifications-close>Cerrar</button>`,
     onMount(instance) {
       instance.foot.querySelector('[data-notifications-close]').addEventListener('click', instance.close);
@@ -347,12 +347,12 @@ async function quickStart(kind) {
 }
 
 export function mountHome(root) {
-  document.title = 'Cacup — Editor de video';
+  document.title = 'openCUP — Editor de video';
   const home = document.createElement('div');
   home.className = 'home';
   home.innerHTML = `
     <aside class="home-sidebar">
-      <button class="home-brand" data-home-action="top">${logo}<span>Cacup</span></button>
+      <button class="home-brand" data-home-action="top">${logo}<span>openCUP</span></button>
       <div class="side-user">
         <div class="side-user-row">
           <div class="avatar">${logo}</div>
@@ -575,7 +575,7 @@ export function mountHome(root) {
     else if (action === 'capcut') openCapCutImportDialog();
     else if (action === 'ai-bridge') void openAiBridgeDialog();
     else if (action === 'library') openUnavailable('Biblioteca', 'Abre un proyecto para ver su biblioteca de medios local. No hay contenido en la nube.');
-    else if (action === 'invite') openUnavailable('Invitar a amigos', 'Cacup funciona sin cuentas. Comparte el proyecto exportado como archivo de video para colaborar.');
+    else if (action === 'invite') openUnavailable('Invitar a amigos', 'openCUP funciona sin cuentas. Comparte el proyecto exportado como archivo de video para colaborar.');
     else if (action === 'more-tools') moreToolsPanel.classList.toggle('hidden');
     else if (action === 'editpilot') focusEditPilot();
     else if (action === 'ai-tools' || action === 'ai-image' || action === 'ai-expand') {

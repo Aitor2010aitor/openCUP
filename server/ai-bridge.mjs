@@ -7,15 +7,15 @@ import { capcutMime } from './capcut.mjs';
 
 /* ------------------------------------------------------------------ */
 /*  Puente de control para IA                                          */
-/*  Permite que otra IA lea el estado de Cacup y ejecute acciones      */
+/*  Permite que otra IA lea el estado de openCUP y ejecute acciones      */
 /*  sobre la aplicación abierta en el navegador.                       */
 /* ------------------------------------------------------------------ */
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const tokenPath = join(root, '.cacup-ai-token');
+const tokenPath = join(root, '.openCUP-ai-token');
 
 function loadToken() {
-  if (process.env.CACUP_AI_TOKEN) return process.env.CACUP_AI_TOKEN.trim();
+  if (process.env.openCUP_AI_TOKEN) return process.env.openCUP_AI_TOKEN.trim();
   try {
     const saved = readFileSync(tokenPath, 'utf8').trim();
     if (saved) return saved;
@@ -29,7 +29,7 @@ export const aiToken = loadToken();
 
 export const AI_ACTIONS = [
   { action: 'getState', description: 'Devuelve el estado completo: proyecto, clips, medios, selección, cursor y paneles.' },
-  { action: 'listProjects', description: 'Lista los proyectos guardados en Cacup.' },
+  { action: 'listProjects', description: 'Lista los proyectos guardados en openCUP.' },
   { action: 'newProject', params: { name: 'string' }, description: 'Crea un proyecto nuevo y abre el editor.' },
   { action: 'openProject', params: { id: 'string', name: 'string (alternativa)' }, description: 'Abre un proyecto guardado por id o nombre.' },
   { action: 'goHome', description: 'Vuelve a la pantalla de inicio.' },
@@ -98,14 +98,14 @@ function text(res, status, body) {
 
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Cacup-Token');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-openCUP-Token');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
 }
 
 function authorized(req, url) {
   const header = String(req.headers.authorization || '');
   const bearer = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
-  const token = bearer || String(req.headers['x-cacup-token'] || '') || url.searchParams.get('token') || '';
+  const token = bearer || String(req.headers['x-openCUP-token'] || '') || url.searchParams.get('token') || '';
   return token === aiToken;
 }
 
@@ -200,7 +200,7 @@ function waitForResult(id, timeout = 25_000) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       waiters.delete(id);
-      resolve({ id, ok: false, pending: true, error: 'Sin respuesta del navegador. Abre Cacup y activa el puente IA.' });
+      resolve({ id, ok: false, pending: true, error: 'Sin respuesta del navegador. Abre openCUP y activa el puente IA.' });
     }, timeout);
     waiters.set(id, { resolve, timer });
   });
@@ -211,7 +211,7 @@ export function aiStatus({ includeToken = false } = {}) {
   const target = newestClient();
   return {
     ok: true,
-    name: 'Cacup AI Bridge',
+    name: 'openCUP AI Bridge',
     version: '1.0.0',
     port: bridgePort,
     enabled: true,
@@ -277,27 +277,27 @@ export function bridgeLog() {
 }
 
 function welcomePage() {
-  return `<!doctype html><html lang="es"><meta charset="utf-8"><title>Cacup AI Bridge</title>
+  return `<!doctype html><html lang="es"><meta charset="utf-8"><title>openCUP AI Bridge</title>
 <style>body{background:#0c1112;color:#e8f4f4;font:14px/1.6 system-ui,sans-serif;padding:40px;max-width:860px;margin:auto}code{background:#132b2e;padding:2px 6px;border-radius:4px;color:#7deff5}pre{background:#101a1c;border:1px solid #1f3a3d;border-radius:8px;padding:16px;overflow:auto}a{color:#57e5ef}h1{font-size:24px}</style>
-<h1>Cacup AI Bridge</h1>
-<p>Puerto <code>${bridgePort}</code>. Requiere el token que aparece en Cacup → Menú → Puente IA.</p>
-<pre>curl -H "Authorization: Bearer $CACUP_AI_TOKEN" http://127.0.0.1:${bridgePort}/api/ai/status
-curl -H "Authorization: Bearer $CACUP_AI_TOKEN" http://127.0.0.1:${bridgePort}/api/ai/state
-curl -X POST -H "Authorization: Bearer $CACUP_AI_TOKEN" -H "Content-Type: application/json" \\
+<h1>openCUP AI Bridge</h1>
+<p>Puerto <code>${bridgePort}</code>. Requiere el token que aparece en openCUP → Menú → Puente IA.</p>
+<pre>curl -H "Authorization: Bearer $openCUP_AI_TOKEN" http://127.0.0.1:${bridgePort}/api/ai/status
+curl -H "Authorization: Bearer $openCUP_AI_TOKEN" http://127.0.0.1:${bridgePort}/api/ai/state
+curl -X POST -H "Authorization: Bearer $openCUP_AI_TOKEN" -H "Content-Type: application/json" \\
   -d '{"action":"addText","params":{"content":"Hola desde una IA","start":0,"duration":3},"wait":true}' \\
   http://127.0.0.1:${bridgePort}/api/ai/command</pre>
 <p><a href="/api/ai/actions">Ver todas las acciones</a></p>
 <p>Este servidor escucha únicamente en 127.0.0.1. No se expone a Internet.</p>`;
 }
 
-export function startAiBridge(preferredPort = Number(process.env.CACUP_AI_PORT || 8790), attempts = 20) {
+export function startAiBridge(preferredPort = Number(process.env.openCUP_AI_PORT || 8790), attempts = 20) {
   const server = createServer(async (req, res) => {
     cors(res);
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
     const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
     try {
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/api/ai')) {
-        if (!authorized(req, url)) { text(res, 401, 'Token requerido. Consulta Cacup → Menú → Puente IA.'); return; }
+        if (!authorized(req, url)) { text(res, 401, 'Token requerido. Consulta openCUP → Menú → Puente IA.'); return; }
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(welcomePage());
         return;

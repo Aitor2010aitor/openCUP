@@ -57,16 +57,16 @@ const shot = async (name) => {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const state = () => page.evaluate(() => {
-  const project = window.cacup?.state?.project;
+  const project = window.openCUP?.state?.project;
   return {
-    view: window.cacup?.state?.view,
-    playhead: window.cacup?.state?.playhead,
-    playing: window.cacup?.state?.playing,
-    selection: window.cacup?.state?.selection,
-    zoom: window.cacup?.state?.zoom,
-    history: window.cacup?.state?.history?.length,
-    future: window.cacup?.state?.future?.length,
-    media: [...(window.cacup?.state?.media?.values() || [])].map((item) => ({
+    view: window.openCUP?.state?.view,
+    playhead: window.openCUP?.state?.playhead,
+    playing: window.openCUP?.state?.playing,
+    selection: window.openCUP?.state?.selection,
+    zoom: window.openCUP?.state?.zoom,
+    history: window.openCUP?.state?.history?.length,
+    future: window.openCUP?.state?.future?.length,
+    media: [...(window.openCUP?.state?.media?.values() || [])].map((item) => ({
       name: item.name,
       kind: item.kind,
       duration: item.duration,
@@ -130,7 +130,7 @@ check(await page.evaluate(() => document.querySelectorAll('.clip-wave').length) 
 await shot('10-media-imported.png');
 
 // ---- Playback ---------------------------------------------------------------
-await page.evaluate(() => { window.cacup.state.playhead = 0; });
+await page.evaluate(() => { window.openCUP.state.playhead = 0; });
 await page.click('.play-btn');
 await wait(1200);
 data = await state();
@@ -177,14 +177,14 @@ check(data.tracks.find((track) => track.type === 'video').clips.length === 3, 'r
 // ---- Trim the right edge of the clip at 2s ---------------------------------
 const splitBox = await page.evaluate(() => {
   const clips = [...document.querySelectorAll('.clip.video')];
-  const target = clips.find((el) => Math.abs(parseFloat(el.style.left) - 2 * window.cacup.state.zoom) < 2) || clips[1];
+  const target = clips.find((el) => Math.abs(parseFloat(el.style.left) - 2 * window.openCUP.state.zoom) < 2) || clips[1];
   const box = target.getBoundingClientRect();
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 });
 await page.mouse.click(splitBox.x, splitBox.y);
 await wait(120);
 const clipBefore = await page.evaluate(() => {
-  const found = window.cacup.state.project.tracks.find((track) => track.type === 'video')
+  const found = window.openCUP.state.project.tracks.find((track) => track.type === 'video')
     .clips.find((clip) => clip.start > 1.9 && clip.start < 2.1);
   return found ? { id: found.id, duration: found.duration } : null;
 });
@@ -199,7 +199,7 @@ if (clipBefore) {
   await page.mouse.up();
   await wait(250);
   const clipAfter = await page.evaluate((id) => {
-    for (const track of window.cacup.state.project.tracks) {
+    for (const track of window.openCUP.state.project.tracks) {
       const clip = track.clips.find((item) => item.id === id);
       if (clip) return { duration: clip.duration };
     }
@@ -212,8 +212,8 @@ if (clipBefore) {
 
 // ---- Move the selected clip -------------------------------------------------
 const beforeMove = await page.evaluate(() => {
-  const clip = window.cacup.state.project.tracks.find((track) => track.type === 'video')
-    .clips.find((item) => item.id === window.cacup.state.selection);
+  const clip = window.openCUP.state.project.tracks.find((track) => track.type === 'video')
+    .clips.find((item) => item.id === window.openCUP.state.selection);
   return clip ? clip.start : null;
 });
 const clipBox = await page.$eval('.clip.selected', (el) => {
@@ -226,8 +226,8 @@ await page.mouse.move(clipBox.x + 30, clipBox.y, { steps: 6 });
 await page.mouse.up();
 await wait(250);
 const afterMove = await page.evaluate(() => {
-  const clip = window.cacup.state.project.tracks.find((track) => track.type === 'video')
-    .clips.find((item) => item.id === window.cacup.state.selection);
+  const clip = window.openCUP.state.project.tracks.find((track) => track.type === 'video')
+    .clips.find((item) => item.id === window.openCUP.state.selection);
   return clip ? clip.start : null;
 });
 check(afterMove !== null && beforeMove !== null, 'drag moves the selected clip', `${beforeMove} -> ${afterMove}`);
@@ -238,7 +238,7 @@ await wait(150);
 await page.click('[data-preset="0"]');
 await wait(250);
 const styleBeforeEdit = await page.evaluate(() => {
-  const clip = window.cacup.state.project.tracks.find((track) => track.type === 'text').clips[0];
+  const clip = window.openCUP.state.project.tracks.find((track) => track.type === 'text').clips[0];
   if (!clip?.text) return null;
   const { content, ...style } = clip.text;
   return style;
@@ -248,14 +248,14 @@ await page.evaluate(() => {
   area.focus();
   area.select();
 });
-await page.keyboard.type('Hola Cacup');
+await page.keyboard.type('Hola openCUP');
 await wait(250);
 data = await state();
 const textClip = data.tracks.find((track) => track.type === 'text').clips[0];
-check(textClip?.text === 'Hola Cacup', 'editing text updates the clip', textClip?.text);
-check(await page.evaluate(() => document.querySelector('.clip-text-preview')?.textContent) === 'Hola Cacup', 'timeline preview reflects text');
+check(textClip?.text === 'Hola openCUP', 'editing text updates the clip', textClip?.text);
+check(await page.evaluate(() => document.querySelector('.clip-text-preview')?.textContent) === 'Hola openCUP', 'timeline preview reflects text');
 const styleAfterEdit = await page.evaluate(() => {
-  const clip = window.cacup.state.project.tracks.find((track) => track.type === 'text').clips[0];
+  const clip = window.openCUP.state.project.tracks.find((track) => track.type === 'text').clips[0];
   if (!clip?.text) return null;
   const { content, ...style } = clip.text;
   return style;
@@ -282,8 +282,8 @@ await wait(150);
 await page.click('[data-transition="fade"]');
 await wait(200);
 const fade = await page.evaluate(() => {
-  const clip = window.cacup.state.project.tracks.find((track) => track.type === 'video')
-    .clips.find((item) => item.id === window.cacup.state.selection);
+  const clip = window.openCUP.state.project.tracks.find((track) => track.type === 'video')
+    .clips.find((item) => item.id === window.openCUP.state.selection);
   return clip ? { fadeIn: clip.fadeIn, fadeOut: clip.fadeOut } : null;
 });
 check(fade?.fadeIn > 0 && fade?.fadeOut > 0, 'applies a fade transition', JSON.stringify(fade));

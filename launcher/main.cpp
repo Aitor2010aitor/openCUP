@@ -1,4 +1,4 @@
-/* Cacup — launcher de escritorio 100% C++ nativo (Win32 + WebView2 COM).
+/* openCUP — launcher de escritorio 100% C++ nativo (Win32 + WebView2 COM).
    Sustituye al antiguo launcher C#/.NET: mismo comportamiento (instancia única,
    servidor local propio, WebView2 oscuro) sin dependencia de .NET ni de DLLs
    gestionadas. Compilar con MSVC x64 y WebView2LoaderStatic.lib. */
@@ -41,9 +41,9 @@ using Microsoft::WRL::ComPtr;
 namespace {
 
 constexpr wchar_t kAppUrl[]      = L"http://127.0.0.1:8787/";
-constexpr wchar_t kWindowClass[] = L"CacupDesktopWindow";
-constexpr wchar_t kInstanceMutex[] = L"Cacup.Desktop.SingleInstance";
-constexpr wchar_t kWindowTitle[] = L"Cacup";
+constexpr wchar_t kWindowClass[] = L"openCUPDesktopWindow";
+constexpr wchar_t kInstanceMutex[] = L"openCUP.Desktop.SingleInstance";
+constexpr wchar_t kWindowTitle[] = L"openCUP";
 
 constexpr int kClientWidth  = 1460;
 constexpr int kClientHeight = 900;
@@ -68,7 +68,7 @@ HBRUSH   g_bgBrush     = nullptr;
 
 std::atomic<bool> g_stoppingServer{false};   // cierre ordenado del servidor
 std::vector<HANDLE> g_pendingReads;          // descriptores sin hilo lector
-HANDLE   g_jobObject = nullptr;              // Job: node muere con Cacup
+HANDLE   g_jobObject = nullptr;              // Job: node muere con openCUP
 
 ComPtr<ICoreWebView2Controller> g_controller;
 ComPtr<ICoreWebView2>           g_webView;
@@ -80,13 +80,13 @@ std::wstring DataDirectory() {
   if (FAILED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, localAppData))) {
     wcscpy_s(localAppData, L".");
   }
-  std::wstring dir = std::wstring(localAppData) + L"\\Cacup";
+  std::wstring dir = std::wstring(localAppData) + L"\\openCUP";
   CreateDirectoryW(dir.c_str(), nullptr);
   return dir;
 }
 
 std::wstring LogPath() {
-  return DataDirectory() + L"\\cacup.log";
+  return DataDirectory() + L"\\openCUP.log";
 }
 
 std::wstring AppDirectory() {
@@ -127,7 +127,7 @@ void LogWide(const wchar_t* prefix, const std::wstring& text) {
 
 bool ProbeServer() {
   bool ready = false;
-  HINTERNET session = WinHttpOpen(L"Cacup/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
+  HINTERNET session = WinHttpOpen(L"openCUP/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
                                   WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
   if (session) {
     WinHttpSetTimeouts(session, 800, 800, 800, 800);
@@ -176,7 +176,7 @@ std::wstring Quote(const std::wstring& value) {
 // por lo que rehacerlo a mano falla con ERROR_INVALID_PARAMETER).
 void ConfigureServerEnvironment() {
   SetEnvironmentVariableW(L"PORT", L"8787");
-  SetEnvironmentVariableW(L"CACUP_DESKTOP", L"1");
+  SetEnvironmentVariableW(L"openCUP_DESKTOP", L"1");
 }
 
 // Volcado de stdout/stderr del servidor al registro. El hilo es dueño del
@@ -255,7 +255,7 @@ void StartServer() {
   CloseHandle(process.hThread);
   g_serverJob = process.hProcess;
   g_ownsServer = true;
-  // El hijo pasa al Job: si Cacup muere, Windows lo termina con él.
+  // El hijo pasa al Job: si openCUP muere, Windows lo termina con él.
   if (g_jobObject && !AssignProcessToJobObject(g_jobObject, process.hProcess)) {
     LogLine("Aviso: no se pudo asociar el servidor al Job (error " +
             std::to_string(GetLastError()) + ")");
@@ -294,7 +294,7 @@ void StartServer() {
   }
 }
 
-// Job object: si Cacup muere (incluso a la fuerza), Windows mata al servidor
+// Job object: si openCUP muere (incluso a la fuerza), Windows mata al servidor
 // hijo. Evita quedarse con un node huérfano ocupando los puertos 8787/8790.
 void CreateServerJob() {
   g_jobObject = CreateJobObjectW(nullptr, nullptr);
@@ -380,7 +380,7 @@ void InitializeWebView() {
             LogWide(L"WebView2 entorno: ", std::to_wstring(result));
             if (g_statusLabel) {
               SetWindowTextW(g_statusLabel,
-                             L"No se pudo abrir la interfaz de Cacup.\r\n"
+                             L"No se pudo abrir la interfaz de openCUP.\r\n"
                              L"Comprueba que WebView2 Runtime esté instalado.");
             }
             return S_OK;
@@ -393,7 +393,7 @@ void InitializeWebView() {
                     LogWide(L"WebView2 controlador: ", std::to_wstring(result));
                     if (g_statusLabel) {
                       SetWindowTextW(g_statusLabel,
-                                     L"No se pudo abrir la interfaz de Cacup.\r\n"
+                                     L"No se pudo abrir la interfaz de openCUP.\r\n"
                                      L"Comprueba que WebView2 Runtime esté instalado.");
                     }
                     return S_OK;
@@ -433,7 +433,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
   switch (message) {
     case WM_CREATE:
       g_statusLabel = CreateWindowExW(
-          0, L"STATIC", L"Iniciando Cacup…",
+          0, L"STATIC", L"Iniciando openCUP…",
           WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
           0, 0, 0, 0, window, nullptr, g_instance, nullptr);
       return 0;
@@ -493,7 +493,7 @@ bool AlreadyRunning() {
   if (!mutex) return false;
   if (GetLastError() == ERROR_ALREADY_EXISTS) {
     CloseHandle(mutex);
-    MessageBoxW(nullptr, L"Cacup ya está abierto.", kWindowTitle,
+    MessageBoxW(nullptr, L"openCUP ya está abierto.", kWindowTitle,
                 MB_OK | MB_ICONINFORMATION);
     return true;
   }
@@ -552,8 +552,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
       LogLine("El servidor local no respondió en 30 s");
       if (g_statusLabel) {
         SetWindowTextW(g_statusLabel,
-                       L"No se pudo iniciar el servidor local de Cacup.\r\n"
-                       L"Revisa %LOCALAPPDATA%\\Cacup\\cacup.log");
+                       L"No se pudo iniciar el servidor local de openCUP.\r\n"
+                       L"Revisa %LOCALAPPDATA%\\openCUP\\openCUP.log");
       }
     }
   }

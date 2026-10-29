@@ -25,17 +25,17 @@ await page.waitForSelector('[data-new-name]');
 await page.evaluate(() => { document.querySelector('[data-new-name]').value = 'Efectos visuales'; });
 await page.click('[data-new-create]');
 await page.waitForSelector('.editor');
-await page.waitForFunction(() => window.cacup?.state?.project?.id);
-await page.evaluate(() => window.cacup.command('setPanel', { panel: 'media' }));
+await page.waitForFunction(() => window.openCUP?.state?.project?.id);
+await page.evaluate(() => window.openCUP.command('setPanel', { panel: 'media' }));
 const mediaChooser = page.waitForFileChooser();
 await page.click('.media-drop');
 await (await mediaChooser).accept([path.resolve('tools/fixtures/foto.png')]);
-await page.waitForFunction(() => window.cacup.state.project.tracks.some((track) => track.clips.some((clip) => clip.kind === 'image')), { timeout: 20000 });
+await page.waitForFunction(() => window.openCUP.state.project.tracks.some((track) => track.clips.some((clip) => clip.kind === 'image')), { timeout: 20000 });
 const clipId = await page.evaluate(() => {
-  const track = window.cacup.state.project.tracks.find((item) => item.type === 'video');
+  const track = window.openCUP.state.project.tracks.find((item) => item.type === 'video');
   return track.clips.find((clip) => clip.kind === 'image').id;
 });
-await page.evaluate((id) => window.cacup.command('selectClip', { id }), clipId);
+await page.evaluate((id) => window.openCUP.command('selectClip', { id }), clipId);
 
 const effects = [
   ['tnd_heart', 'Corazón brillante'],
@@ -49,7 +49,7 @@ const effects = [
 ];
 
 for (const [key, label] of effects) {
-  await page.evaluate(({ id, effect }) => window.cacup.command('applyEffect', { clip: id, effect }), { id: clipId, effect: key });
+  await page.evaluate(({ id, effect }) => window.openCUP.command('applyEffect', { clip: id, effect }), { id: clipId, effect: key });
   await new Promise((resolve) => setTimeout(resolve, 350));
   await page.screenshot({ path: path.join(SHOTS, `fx-${key}.png`) });
   console.log('shot', key, label);

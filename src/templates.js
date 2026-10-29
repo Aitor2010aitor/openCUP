@@ -38,7 +38,7 @@ export const TEMPLATES = [
     ratio: '4:5',
     size: 74,
     content: '“La creatividad\nno se detiene.”',
-    subtitle: 'Cacup Studio',
+    subtitle: 'openCUP Studio',
     color: '#ffffff',
     accent: '#e5c79a',
     art: 'linear-gradient(150deg,#3a2a1c,#8a6136 55%,#e5c79a)',

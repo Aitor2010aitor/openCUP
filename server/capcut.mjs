@@ -6,14 +6,14 @@ import { homedir } from 'node:os';
 /* ------------------------------------------------------------------ */
 /*  CapCut native draft reader                                         */
 /*  Lee la carpeta de borradores de CapCut y la convierte al modelo    */
-/*  interno de Cacup. No modifica ningún archivo de CapCut.            */
+/*  interno de openCUP. No modifica ningún archivo de CapCut.            */
 /* ------------------------------------------------------------------ */
 
 const local = process.env.LOCALAPPDATA || '';
 const roaming = process.env.APPDATA || '';
 
 const CANDIDATE_ROOTS = [
-  process.env.CACUP_CAPCUT_ROOT,
+  process.env.openCUP_CAPCUT_ROOT,
   local && join(local, 'CapCut', 'User Data', 'Projects', 'com.lveditor.draft'),
   local && join(local, 'JianyingPro', 'User Data', 'Projects', 'com.lveditor.draft'),
   roaming && join(roaming, 'CapCut', 'User Data', 'Projects', 'com.lveditor.draft'),

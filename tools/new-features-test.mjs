@@ -47,7 +47,7 @@ try {
   await page.evaluate(() => { document.querySelector('[data-new-name]').value = 'Prueba nuevas herramientas'; });
   await page.click('[data-new-create]');
   await page.waitForSelector('.editor');
-  await page.waitForFunction(() => window.cacup?.state?.project?.id);
+  await page.waitForFunction(() => window.openCUP?.state?.project?.id);
 
   const tabs = await page.$$eval('.tools-strip .tab', (els) => els.map((el) => el.dataset.panel || el.textContent.trim()));
   check(tabs.length === 11, `editor muestra 11 pestañas (${tabs.length})`);
@@ -57,7 +57,7 @@ try {
       const tabs = [...document.querySelectorAll('.tools-strip .tab')];
       tabs.find((tab) => (tab.dataset.panel || '') === name)?.click();
     }, panel);
-    await page.waitForFunction((name) => window.cacup.state.panel === name, {}, panel);
+    await page.waitForFunction((name) => window.openCUP.state.panel === name, {}, panel);
     await new Promise((resolve) => setTimeout(resolve, 120));
   };
 
@@ -70,7 +70,7 @@ try {
   await page.click('.sticker-btn');
   await new Promise((resolve) => setTimeout(resolve, 200));
   const stickerState = await page.evaluate(() => {
-    const found = window.cacup.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === window.cacup.state.selection);
+    const found = window.openCUP.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === window.openCUP.state.selection);
     return found ? { kind: found.kind, sticker: found.sticker } : null;
   });
   check(stickerState?.kind === 'sticker', 'sticker insertado como capa sticker');
@@ -83,14 +83,14 @@ try {
   await page.click('.media-drop');
   const chooser = await chooserPromise;
   await chooser.accept([path.resolve('tools/fixtures/foto.png')]);
-  await page.waitForFunction(() => [...window.cacup.state.media.values()].some((media) => media.kind === 'image'), { timeout: 30000 });
-  await page.waitForFunction(() => window.cacup.state.project.tracks.some((track) => track.clips.some((clip) => clip.kind === 'image')), { timeout: 20000 });
+  await page.waitForFunction(() => [...window.openCUP.state.media.values()].some((media) => media.kind === 'image'), { timeout: 30000 });
+  await page.waitForFunction(() => window.openCUP.state.project.tracks.some((track) => track.clips.some((clip) => clip.kind === 'image')), { timeout: 20000 });
   const imageClipId = await page.evaluate(() => {
-    const track = window.cacup.state.project.tracks.find((item) => item.type === 'video');
+    const track = window.openCUP.state.project.tracks.find((item) => item.type === 'video');
     return track?.clips.find((clip) => clip.kind === 'image')?.id || null;
   });
   check(Boolean(imageClipId), 'imagen importada en la pista de video');
-  if (imageClipId) await page.evaluate(async (id) => { await window.cacup.command('selectClip', { id }); }, imageClipId);
+  if (imageClipId) await page.evaluate(async (id) => { await window.openCUP.command('selectClip', { id }); }, imageClipId);
 
   await clickTab('effects');
   const effectCards = await page.$$('.effect-grid .effect-card');
@@ -100,7 +100,7 @@ try {
   await page.click('[data-effect="oldFilm"]');
   await new Promise((resolve) => setTimeout(resolve, 250));
   const effectState = await page.evaluate(() => {
-    const found = window.cacup.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === window.cacup.state.selection);
+    const found = window.openCUP.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === window.openCUP.state.selection);
     return found ? { kind: found.kind, effect: found.effect } : null;
   });
   check(effectState?.kind === 'image' && effectState?.effect === 'oldFilm', 'efecto oldFilm aplicado a la imagen');
@@ -113,7 +113,7 @@ try {
   await page.click('[data-transition="slide-left"]');
   await new Promise((resolve) => setTimeout(resolve, 200));
   check(await page.evaluate(() => {
-    const found = window.cacup.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === window.cacup.state.selection);
+    const found = window.openCUP.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === window.openCUP.state.selection);
     return found?.transition === 'slide-left' && found?.transitionDuration === 0.6;
   }), 'transición slide-left aplicada');
 
@@ -126,7 +126,7 @@ try {
   await page.click('[data-add-subtitle]');
   await new Promise((resolve) => setTimeout(resolve, 350));
   check(await page.evaluate(() => {
-    const found = window.cacup.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === window.cacup.state.selection);
+    const found = window.openCUP.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === window.openCUP.state.selection);
     return found?.kind === 'text' && found?.text?.color === '#ffe34d';
   }), 'subtítulo creado con estilo amarillo');
   await page.screenshot({ path: path.join(SHOTS, 'new-captions-added.png') });
@@ -138,7 +138,7 @@ try {
   await page.click('[data-avatar="presenter"]');
   await new Promise((resolve) => setTimeout(resolve, 200));
   check(await page.evaluate(() => {
-    const found = window.cacup.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === window.cacup.state.selection);
+    const found = window.openCUP.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.id === window.openCUP.state.selection);
     return found?.kind === 'sticker' && found?.sticker?.background === '#1d6d78' && found?.sticker?.shape === 'circle';
   }), 'avatar insertado con fondo circular');
 
@@ -167,10 +167,10 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'new-templates.png') });
 
   // Diálogo del puente IA desde el propio API.
-  await page.evaluate(() => { void window.cacup.openBridge(); });
+  await page.evaluate(() => { void window.openCUP.openBridge(); });
   await page.waitForSelector('.bridge-modal .bridge-hero, .bridge-modal .bridge-offline', { timeout: 8000 });
   const bridgeText = await page.$eval('.bridge-modal .modal-body', (el) => el.textContent);
-  check(bridgeText.includes('Cacup AI Bridge'), 'diálogo IA muestra el puente');
+  check(bridgeText.includes('openCUP AI Bridge'), 'diálogo IA muestra el puente');
   check(bridgeText.includes('8790'), 'diálogo IA muestra el puerto 8790');
   check(await page.$('.bridge-actions .bridge-action') !== null, 'diálogo IA lista acciones');
   await page.screenshot({ path: path.join(SHOTS, 'new-bridge.png') });
@@ -178,7 +178,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 150));
 
   // CapCut desde inicio.
-  await page.evaluate(() => window.cacup.command('goHome'));
+  await page.evaluate(() => window.openCUP.command('goHome'));
   await page.waitForSelector('.home');
   await page.click('[data-home-action="capcut"]');
   await page.waitForSelector('.capcut-modal .capcut-list, .capcut-modal .capcut-empty', { timeout: 10000 });
@@ -197,9 +197,9 @@ try {
   });
   check(clicked1007, 'se puede abrir el borrador CapCut 1007');
   if (clicked1007) {
-    await page.waitForFunction(() => window.cacup.state.view === 'editor' && window.cacup.state.project?.source?.type === 'capcut', { timeout: 20000 });
+    await page.waitForFunction(() => window.openCUP.state.view === 'editor' && window.openCUP.state.project?.source?.type === 'capcut', { timeout: 20000 });
     const capcutState = await page.evaluate(() => {
-      const project = window.cacup.state.project;
+      const project = window.openCUP.state.project;
       return {
         name: project.name,
         source: project.source,
@@ -212,7 +212,7 @@ try {
   }
 
   // Puente IA real: estado y comando con token.
-  const token = (await readFile('.cacup-ai-token', 'utf8')).trim();
+  const token = (await readFile('.openCUP-ai-token', 'utf8')).trim();
   const api = (route) => `http://127.0.0.1:8790/api/ai${route}`;
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const statusResponse = await fetch(api('/status'), { headers });
@@ -238,7 +238,7 @@ try {
   });
   const command = await commandResponse.json();
   check(commandResponse.ok && command.ok, `comando addText ejecutado (${command.error || 'ok'})`);
-  const afterCommand = await page.evaluate(() => window.cacup.state.project.tracks.flatMap((track) => track.clips).some((clip) => clip.text?.content === 'Texto desde otra IA'));
+  const afterCommand = await page.evaluate(() => window.openCUP.state.project.tracks.flatMap((track) => track.clips).some((clip) => clip.text?.content === 'Texto desde otra IA'));
   check(afterCommand, 'el texto del comando aparece en el proyecto');
 
   const screenshotResponse = await fetch(api('/command'), {
@@ -250,13 +250,13 @@ try {
   check(screenshotResponse.ok && String(screenshot.result?.dataUrl || '').startsWith('data:image/jpeg'), 'comando screenshot devuelve JPEG');
 
   // ---- Transformación estilo CapCut: escala, fotogramas clave y alineación ----
-  await page.evaluate(() => window.cacup.command('newProject', { name: 'Transformación CapCut' }));
-  await page.waitForFunction(() => window.cacup.state.view === 'editor');
+  await page.evaluate(() => window.openCUP.command('newProject', { name: 'Transformación CapCut' }));
+  await page.waitForFunction(() => window.openCUP.state.view === 'editor');
   await new Promise((resolve) => setTimeout(resolve, 250));
   const transformClipId = await page.evaluate(async () => {
-    const added = await window.cacup.command('addText', { content: 'CACUP', start: 0, duration: 5 });
-    window.cacup.command('selectClip', { id: added.clip.id });
-    window.cacup.command('seek', { time: 0.5 });
+    const added = await window.openCUP.command('addText', { content: 'openCUP', start: 0, duration: 5 });
+    window.openCUP.command('selectClip', { id: added.clip.id });
+    window.openCUP.command('seek', { time: 0.5 });
     return added.clip.id;
   });
   check(typeof transformClipId === 'string', 'clip de texto creado para probar transformación');
@@ -300,21 +300,21 @@ try {
       input.value = String(value);
       input.dispatchEvent(new Event('change', { bubbles: true }));
     };
-    window.cacup.command('seek', { time: 0.5 });
+    window.openCUP.command('seek', { time: 0.5 });
     await nap(80);
     document.querySelector('[data-kf-toggle="scale"]').click(); // clave al valor efectivo (100%)
     await nap(80);
-    window.cacup.command('seek', { time: 2.5 });
+    window.openCUP.command('seek', { time: 2.5 });
     await nap(80);
     setSpin(200); // la propiedad ya tiene keyframes: escribe una clave con 200%
     await nap(80);
-    window.cacup.command('seek', { time: 1.5 });
+    window.openCUP.command('seek', { time: 1.5 });
     await nap(120);
-    const clip = window.cacup.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.cacup.state.selection);
+    const clip = window.openCUP.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.openCUP.state.selection);
     const mid = Number(spin().value);
     document.querySelector('[data-kf-nav="1"]').click();
     await nap(120);
-    return { count: clip.keyframes?.scale?.length || 0, mid, afterNext: window.cacup.state.playhead };
+    return { count: clip.keyframes?.scale?.length || 0, mid, afterNext: window.openCUP.state.playhead };
   });
   check(keyframeFlow.count === 2, `escala con 2 fotogramas clave (${keyframeFlow.count})`);
   check(Math.abs(keyframeFlow.mid - 150) < 1, 'la escala se interpola entre fotogramas (150% a mitad de camino)', String(keyframeFlow.mid));
@@ -331,7 +331,7 @@ try {
     input.value = '-12';
     input.dispatchEvent(new Event('change', { bubbles: true }));
     await nap(80);
-    const clip = window.cacup.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.cacup.state.selection);
+    const clip = window.openCUP.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.openCUP.state.selection);
     return { y: clip.y };
   });
   check(Math.abs(spinWrite.y + 12) < 0.0001, 'el cajón numérico Y escribe la posición', JSON.stringify(spinWrite));
@@ -339,7 +339,7 @@ try {
   // Alineación en el lienzo (proyecto 16:9 por defecto).
   const alignFlow = await page.evaluate(async () => {
     const nap = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-    const clipOf = () => window.cacup.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.cacup.state.selection);
+    const clipOf = () => window.openCUP.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.openCUP.state.selection);
     document.querySelector('[data-align="left"]').click();
     await nap(80);
     const leftX = clipOf().x;
@@ -361,7 +361,7 @@ try {
   await page.click('[data-transform-reset]');
   await new Promise((resolve) => setTimeout(resolve, 150));
   const resetState = await page.evaluate(() => {
-    const clip = window.cacup.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.cacup.state.selection);
+    const clip = window.openCUP.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.openCUP.state.selection);
     return { x: clip.x, y: clip.y, scale: clip.scale, rotate: clip.rotate, kf: Object.keys(clip.keyframes || {}).length };
   });
   check(resetState.x === 0 && resetState.y === 0 && resetState.scale === 1 && resetState.rotate === 0 && resetState.kf === 0, 'restablecer transformación limpia valores y fotogramas clave', JSON.stringify(resetState));
@@ -380,10 +380,10 @@ try {
     const group = document.querySelector('[data-details] details[data-section="transform"]');
     group.open = false;
     await nap(120); // el evento toggle se lanza de forma asíncrona
-    window.cacup.command('selectClip', { id: null });
+    window.openCUP.command('selectClip', { id: null });
     await nap(120);
-    const textId = window.cacup.state.project.tracks.flatMap((t) => t.clips).find((c) => c.kind === 'text').id;
-    window.cacup.command('selectClip', { id: textId });
+    const textId = window.openCUP.state.project.tracks.flatMap((t) => t.clips).find((c) => c.kind === 'text').id;
+    window.openCUP.command('selectClip', { id: textId });
     await nap(150);
     const after = document.querySelector('[data-details] details[data-section="transform"]');
     return after ? after.open : null;

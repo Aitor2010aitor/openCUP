@@ -42,10 +42,10 @@ page.on('pageerror', (error) => errors.push(error.message));
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const state = () => page.evaluate(() => ({
-  view: window.cacup?.state?.view,
-  project: window.cacup?.state?.project?.name,
-  projects: (window.cacup?.state?.projects || []).map((item) => item.name),
-  tracks: window.cacup?.state?.project?.tracks?.map((track) => ({
+  view: window.openCUP?.state?.view,
+  project: window.openCUP?.state?.project?.name,
+  projects: (window.openCUP?.state?.projects || []).map((item) => item.name),
+  tracks: window.openCUP?.state?.project?.tracks?.map((track) => ({
     type: track.type,
     clips: track.clips.map((clip) => ({
       kind: clip.kind,
@@ -140,7 +140,7 @@ await page.waitForSelector('.editor');
 await wait(600);
 data = await state();
 check(data.project === 'Vlog vertical', 'home template creates its project', data.project);
-check(await page.evaluate(() => window.cacup.state.project.ratio) === '9:16', 'template applies its aspect ratio');
+check(await page.evaluate(() => window.openCUP.state.project.ratio) === '9:16', 'template applies its aspect ratio');
 const templateTextTracks = data.tracks?.filter((track) => track.type === 'text') || [];
 const templateClips = templateTextTracks.flatMap((track) => track.clips);
 const templateText = templateClips.find((clip) => clip.text?.includes('MI DÍA'));

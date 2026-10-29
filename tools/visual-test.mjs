@@ -33,7 +33,7 @@ await shot('01-home.png');
 
 const homeMetrics = await page.evaluate(() => ({
   viewport: [innerWidth, innerHeight],
-  projects: window.cacup?.state?.projects?.length,
+  projects: window.openCUP?.state?.projects?.length,
   scrollHeight: document.querySelector('.home-main')?.scrollHeight,
   heroColor: getComputedStyle(document.querySelector('.hero-create')).color,
   heroBg: getComputedStyle(document.querySelector('.hero-create')).backgroundColor,
@@ -80,7 +80,7 @@ await new Promise((resolve) => setTimeout(resolve, 400));
 await shot('05-text-clip.png');
 
 const textMetrics = await page.evaluate(() => ({
-  selection: window.cacup?.state?.selection,
+  selection: window.openCUP?.state?.selection,
   clips: [...document.querySelectorAll('.clip')].map((el) => ({
     name: el.querySelector('.clip-label')?.textContent,
     width: Math.round(el.getBoundingClientRect().width),

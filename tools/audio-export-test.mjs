@@ -45,7 +45,7 @@ await chooser.accept([path.join(MEDIA, 'clip-video.webm'), path.join(MEDIA, 'mus
 await page.waitForFunction(() => document.querySelectorAll('.clip').length === 2, { timeout: 40000 });
 await wait(600);
 
-const tracks = await page.evaluate(() => window.cacup.state.project.tracks.map((track) => ({
+const tracks = await page.evaluate(() => window.openCUP.state.project.tracks.map((track) => ({
   type: track.type,
   clips: track.clips.map((clip) => ({ kind: clip.kind, duration: clip.duration, mediaId: clip.mediaId })),
 })));
@@ -53,7 +53,7 @@ console.log('tracks', JSON.stringify(tracks));
 
 // Recorta ambos clips a 3 s para que la exportación en tiempo real sea rápida.
 await page.evaluate(() => {
-  for (const track of window.cacup.state.project.tracks) {
+  for (const track of window.openCUP.state.project.tracks) {
     for (const clip of track.clips) {
       if (clip.kind === 'video' || clip.kind === 'audio') clip.duration = 3;
     }
@@ -65,7 +65,7 @@ await page.click('[data-act="export"]');
 await page.waitForSelector('.modal');
 await page.select('[data-export-resolution]', '480p');
 await page.select('[data-export-quality]', 'media');
-await page.evaluate(() => { document.querySelector('[data-export-name]').value = 'cacup-audio-test'; });
+await page.evaluate(() => { document.querySelector('[data-export-name]').value = 'openCUP-audio-test'; });
 await page.click('[data-export-start]');
 console.log('export started');
 

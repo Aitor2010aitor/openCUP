@@ -1,3 +1,0 @@
-// Recursos de Cacup.exe — icono de la aplicación (ID 1, igual que LoadIcon en main.cpp).
-// Compilado con rc.exe por tools/build-desktop.ps1 y enlazado como .res.
-1 ICON "..\\build\\cacup.ico"

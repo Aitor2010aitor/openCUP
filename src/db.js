@@ -1,4 +1,4 @@
-const DB_NAME = 'cacup-db';
+const DB_NAME = 'openCUP-db';
 const DB_VERSION = 1;
 let dbPromise = null;
 

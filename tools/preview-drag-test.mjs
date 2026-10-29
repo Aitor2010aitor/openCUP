@@ -1,4 +1,4 @@
-﻿import puppeteer from 'puppeteer-core';
+import puppeteer from 'puppeteer-core';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const failures = [];
@@ -21,22 +21,22 @@ page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()
 page.on('pageerror', (error) => errors.push(error.message));
 
 await page.goto('http://127.0.0.1:8787/', { waitUntil: 'networkidle0' });
-await page.evaluate(() => window.cacup.command('newProject', { name: 'Manipulación preview' }));
-await page.waitForFunction(() => window.cacup?.state?.project?.id);
-await page.evaluate(() => window.cacup.command('addText', { content: 'Arrastra este texto', size: 96 }));
-await page.waitForFunction(() => window.cacup?.state?.selection);
+await page.evaluate(() => window.openCUP.command('newProject', { name: 'Manipulación preview' }));
+await page.waitForFunction(() => window.openCUP?.state?.project?.id);
+await page.evaluate(() => window.openCUP.command('addText', { content: 'Arrastra este texto', size: 96 }));
+await page.waitForFunction(() => window.openCUP?.state?.selection);
 await page.waitForSelector('.layer-frame:not([hidden])');
 await sleep(500);
 
 const textState = () => page.evaluate(() => {
-  const clip = window.cacup.state.project.tracks.flatMap((track) => track.clips).find((item) => item.kind === 'text');
+  const clip = window.openCUP.state.project.tracks.flatMap((track) => track.clips).find((item) => item.kind === 'text');
   return { id: clip.id, x: clip.x, y: clip.y, scale: clip.scale, rotate: clip.rotate };
 });
 const stickerState = () => page.evaluate(() => {
-  const clip = window.cacup.state.project.tracks.flatMap((track) => track.clips).find((item) => item.kind === 'sticker');
+  const clip = window.openCUP.state.project.tracks.flatMap((track) => track.clips).find((item) => item.kind === 'sticker');
   return clip ? { id: clip.id, x: clip.x, y: clip.y, scale: clip.scale, rotate: clip.rotate } : null;
 });
-const selection = () => page.evaluate(() => window.cacup.state.selection);
+const selection = () => page.evaluate(() => window.openCUP.state.selection);
 
 async function frameBox() {
   const frame = await page.$('.layer-frame:not([hidden])');
@@ -88,13 +88,13 @@ const afterRotate = await textState();
 check(Math.abs(afterRotate.rotate - 90) < 8, `rotación texto ${afterRotate.rotate}° (esperado ~90°)`);
 
 /* 4. Arrastrar un sticker sin tocar el texto. */
-await page.evaluate(() => window.cacup.command('addSticker', { value: '🎉', start: 0, duration: 5, size: 240 }));
-await page.waitForFunction(() => window.cacup.state.project.tracks.some((track) => track.clips.some((clip) => clip.kind === 'sticker')));
+await page.evaluate(() => window.openCUP.command('addSticker', { value: '🎉', start: 0, duration: 5, size: 240 }));
+await page.waitForFunction(() => window.openCUP.state.project.tracks.some((track) => track.clips.some((clip) => clip.kind === 'sticker')));
 await page.evaluate(async () => {
-  const found = window.cacup.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.kind === 'text');
-  await window.cacup.command('updateClip', { id: found.id, patch: { x: -34, y: -30 } });
-  const sticker = window.cacup.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.kind === 'sticker');
-  await window.cacup.command('selectClip', { id: sticker.id });
+  const found = window.openCUP.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.kind === 'text');
+  await window.openCUP.command('updateClip', { id: found.id, patch: { x: -34, y: -30 } });
+  const sticker = window.openCUP.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.kind === 'sticker');
+  await window.openCUP.command('selectClip', { id: sticker.id });
 });
 await sleep(500);
 const stickerBefore = await stickerState();
@@ -109,7 +109,7 @@ const stickerAfter = await stickerState();
 check(stickerAfter.x < stickerBefore.x - 2 && stickerAfter.y < stickerBefore.y - 1, `arrastre sticker x:${stickerBefore.x}→${stickerAfter.x} y:${stickerBefore.y}→${stickerAfter.y}`);
 
 /* 5. Deshacer deja el sticker donde estaba y en un solo paso. */
-await page.evaluate(() => window.cacup.command('undo'));
+await page.evaluate(() => window.openCUP.command('undo'));
 await sleep(350);
 const stickerUndo = await stickerState();
 check(Math.abs(stickerUndo.x - stickerBefore.x) < 0.02 && Math.abs(stickerUndo.y - stickerBefore.y) < 0.02, `deshacer revierte el sticker (${stickerUndo.x}, ${stickerUndo.y})`);
@@ -117,10 +117,10 @@ check((await selection()) === stickerBefore.id, 'deshacer conserva la selección
 
 /* 6. Volver a seleccionar el texto desde el lienzo. */
 const textNow = await page.evaluate(() => {
-  const found = window.cacup.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.kind === 'text');
+  const found = window.openCUP.state.project.tracks.flatMap((track) => track.clips).find((clip) => clip.kind === 'text');
   return { id: found.id, x: found.x, y: found.y };
 });
-await page.evaluate(() => window.cacup.command('selectClip', { id: null }));
+await page.evaluate(() => window.openCUP.command('selectClip', { id: null }));
 await sleep(250);
 // Selección por geometría: clic en el centro del texto movido (-34%, -30%).
 const overlayBox = await page.$eval('.stage-overlay', (element) => {

@@ -3,7 +3,7 @@ dist/
 build/
 shots/
 docs/reference/*.png
-.cacup-ai-token
+.openCUP-ai-token
 shots/downloads/
 shots/export-test/
 shots/audio-export-test/
