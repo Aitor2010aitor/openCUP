@@ -106,11 +106,13 @@ $env:PORT=9000; npm start
 
 La carpeta `dist/Cacup` contiene una aplicación nativa para Windows x64:
 
-- `Cacup.exe` abre la interfaz con WebView2 (Edge embebido) en una ventana propia.
+- `Cacup.exe` es un ejecutable **C++ nativo** (Win32 + WebView2 COM): no usa .NET, no necesita DLLs gestionadas y ocupa ~330 KB.
+- Abre la interfaz con WebView2 (Edge embebido) en una ventana propia con tema oscuro.
 - Incluye `node.exe`, por lo que no hace falta tener Node.js instalado.
-- El servidor local arranca oculto al abrir la app y se detiene al cerrar la ventana.
+- El servidor local arranca oculto al abrir la app y se detiene al cerrar la ventana. Va dentro de un Job de Windows: si la app muere a la fuerza, el servidor hijo se cierra con ella (no quedan procesos huérfanos).
+- Solo puede haber una instancia abierta a la vez.
 - Los proyectos se guardan en `%LOCALAPPDATA%\Cacup\WebView2`; el registro de arranque está en `%LOCALAPPDATA%\Cacup\cacup.log`.
-- El instalador o la carpeta se pueden copiar a otro equipo Windows 10/11 con WebView2 Runtime.
+- La carpeta se puede copiar a otro equipo Windows 10/11 con WebView2 Runtime.
 
 Para generar de nuevo el ejecutable, el icono y el acceso directo del escritorio:
 
@@ -118,7 +120,7 @@ Para generar de nuevo el ejecutable, el icono y el acceso directo del escritorio
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-desktop.ps1
 ```
 
-El script compila `launcher/Program.cs` con el compilador de .NET Framework incluido en Windows, usa el SDK de WebView2 descargado en `build/webview2` y copia la aplicación, el servidor y Node.js en `dist/Cacup`.
+El script localiza las herramientas C++ de MSVC (Visual Studio / Build Tools), descarga el SDK de WebView2 con `tools/fetch-webview2.ps1` si falta, compila `launcher/main.cpp` e incrusta el icono (`rc.exe`), y copia la aplicación, el servidor y Node.js en `dist/Cacup`. Requiere el componente «Desarrollo de escritorio en C++» de Visual Studio.
 
 ## Atajos de teclado
 
@@ -192,9 +194,11 @@ cacup/
 │  ├─ icons.js             Iconos SVG
 │  ├─ utils.js             Utilidades (tiempo, bytes, toasts)
 │  └─ styles.css           Tema oscuro y diseño responsive
-├─ launcher/Program.cs     Lanzador WinForms + WebView2 para Windows
+├─ launcher/main.cpp        Lanzador Win32 + WebView2 escrito en C++ puro
 ├─ tools/                  Pruebas de navegador y scripts de empaquetado
-│  ├─ build-desktop.ps1    Compila el .exe y monta dist/Cacup
+│  ├─ build-desktop.ps1    Compila el .exe en C++ y monta dist/Cacup
+│  ├─ fetch-webview2.ps1   Descarga el SDK nativo de WebView2 desde nuget.org
+│  ├─ run-all-tests.ps1    Levanta el servidor y ejecuta las 11 suites
 │  ├─ make-icon.ps1        Genera el icono multi-resolución
 │  └─ fixtures/            Medios de prueba generados con ffmpeg
 └─ shots/                  Capturas generadas por las pruebas

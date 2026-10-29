@@ -5,31 +5,43 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $webview = Join-Path $root 'build\webview2'
-$core = Join-Path $webview 'lib\net462\Microsoft.Web.WebView2.Core.dll'
-$win = Join-Path $webview 'lib\net462\Microsoft.Web.WebView2.WinForms.dll'
-$loader = Join-Path $webview 'runtimes\win-x64\native\WebView2Loader.dll'
+$include = Join-Path $webview 'build\native\include'
+$loader = Join-Path $webview 'build\native\x64\WebView2LoaderStatic.lib'
 $icon = Join-Path $root 'build\cacup.ico'
 
-if (!(Test-Path $csc)) { throw "No se encontró csc.exe" }
-if (!(Test-Path $core)) { throw "Falta el SDK de WebView2. Ejecuta la descarga de NuGet primero." }
+# Compilador C++: MSVC (Visual Studio Build Tools) vía vcvars64.
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+if (!(Test-Path $vswhere)) { throw 'No se encontró vswhere. Instala Visual Studio con "Desarrollo de escritorio en C++".' }
+$vsRoot = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+if (!$vsRoot) { throw 'No hay herramientas C++ de MSVC instaladas.' }
+$vcvars = Join-Path $vsRoot 'VC\Auxiliary\Build\vcvars64.bat'
+if (!(Test-Path $vcvars)) { throw "No se encontró vcvars64.bat en $vsRoot" }
+
+if (!(Test-Path $include)) { & (Join-Path $PSScriptRoot 'fetch-webview2.ps1') }
+if (!(Test-Path $include)) { throw 'Falta el SDK de WebView2 (build\native\include).' }
+if (!(Test-Path $loader)) { throw 'Falta WebView2LoaderStatic.lib.' }
 
 & (Join-Path $PSScriptRoot 'make-icon.ps1') -Out $icon
 
-& $csc /nologo /target:winexe /platform:x64 /out:"$root\build\Cacup.exe" /win32icon:"$icon" `
-  /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll `
-  /reference:System.Windows.Forms.dll /reference:System.Net.Http.dll `
-  /reference:"$core" /reference:"$win" "$root\launcher\Program.cs"
-if ($LASTEXITCODE -ne 0) { throw "Falló la compilación de Cacup.exe" }
+# Recursos: el icono se incrusta vía .res (link.exe no admite /WIN32ICON).
+$rcFile = Join-Path $root 'launcher\cacup.rc'
+$resFile = Join-Path $root 'build\cacup.res'
+
+# Compilación del launcher C++ nativo (sin .NET): MSVC + WebView2 estático.
+$compile = "rc /nologo /fo `"$resFile`" `"$rcFile`" && " +
+  "cl /nologo /std:c++17 /EHsc /O2 /W3 /DUNICODE /D_UNICODE /I `"$include`" " +
+  "`"$root\launcher\main.cpp`" /Fo`"$root\build\main.obj`" `"$resFile`" /link /SUBSYSTEM:WINDOWS " +
+  "dwmapi.lib winhttp.lib shell32.lib ole32.lib advapi32.lib `"$loader`" " +
+  "/OUT:`"$root\build\Cacup.exe`""
+cmd /c "`"$vcvars`" && $compile"
+if ($LASTEXITCODE -ne 0) { throw 'Falló la compilación de Cacup.exe (C++)' }
+if (!(Test-Path "$root\build\Cacup.exe")) { throw 'Cacup.exe no se generó.' }
 
 if (Test-Path $OutDir) { Remove-Item $OutDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 Copy-Item "$root\build\Cacup.exe" $OutDir
-Copy-Item $core $OutDir
-Copy-Item $win $OutDir
-Copy-Item $loader $OutDir
 Copy-Item "$root\server.mjs" $OutDir
 Copy-Item "$root\index.html" $OutDir
 Copy-Item "$root\package.json" $OutDir
@@ -49,22 +61,23 @@ $readme = @"
 Cacup - aplicación de escritorio
 ================================
 
-Inicio rápido:
-  Doble clic en Cacup.exe. La app arranca su servidor local y abre la
-  interfaz con WebView2. Al cerrar la ventana también se detiene el servidor.
+Inicio rapido:
+  Doble clic en Cacup.exe. La app (ejecutable C++ nativo, sin .NET) arranca
+  su servidor local e interfaz WebView2. Al cerrar la ventana se detiene el
+  servidor.
 
 Requisitos:
-  Windows 10/11 x64 y Microsoft Edge WebView2 Runtime (ya incluido en la
-  mayoría de equipos actualizados). La carpeta incluye Node.js para no
-  depender de una instalación del sistema.
+  Windows 10/11 x64 y Microsoft Edge WebView2 Runtime (incluido en la mayoria
+  de equipos actualizados). La carpeta incluye Node.js para no depender de
+  una instalacion del sistema.
 
 Datos:
   Proyectos y preferencias se guardan en el navegador embebido (IndexedDB).
-  La carpeta de datos de WebView2 está en %LOCALAPPDATA%\Cacup.
-  El registro de arranque está en %LOCALAPPDATA%\Cacup\cacup.log.
+  La carpeta de datos de WebView2 esta en %LOCALAPPDATA%\Cacup.
+  El registro de arranque esta en %LOCALAPPDATA%\Cacup\cacup.log.
 
 El puente de IA escucha en 127.0.0.1:8790 y requiere el token que aparece
-en Cacup > Menú > Puente IA.
+en Cacup > Menu > Puente IA.
 "@
 $readme | Out-File -FilePath (Join-Path $OutDir 'LEEME.txt') -Encoding utf8
 
