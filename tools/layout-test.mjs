@@ -71,7 +71,7 @@ for (const [width, height] of sizes) {
   });
   const stageOk = metrics.stage && metrics.stage.w > 200 && metrics.stage.h > 120;
   const detailsOk = width >= 1161 ? metrics.details.w > 150 : metrics.details.w === 0;
-  const tabsOk = metrics.visibleTabs === 11 && metrics.tabsOverflow <= 1;
+  const tabsOk = metrics.visibleTabs === 12 && metrics.tabsOverflow <= 1;
   const overflowOk = metrics.docOverflow <= 1;
   const ok = stageOk && detailsOk && tabsOk && overflowOk;
   console.log(`${ok ? 'PASS' : 'FAIL'} ${width}x${height}`, JSON.stringify({

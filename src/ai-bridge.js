@@ -26,6 +26,7 @@ import {
   FILTERS,
   TEXT_PRESETS,
 } from './store.js';
+import { analyzeProject, planEdit, applyPlan, undoAutoEdit } from './auto-edit.js';
 import { STICKERS, STICKER_CATEGORIES, EFFECTS, TRANSITIONS, AVATAR_PRESETS, TRANSITION_FADES } from './library.js';
 import { renderStill } from './renderer.js';
 import { icon } from './icons.js';
@@ -65,9 +66,13 @@ export const AI_ACTIONS = [
   { action: 'listEffects', description: 'Efectos disponibles.' },
   { action: 'listTransitions', description: 'Transiciones disponibles.' },
   { action: 'screenshot', description: 'Devuelve un fotograma del reproductor como data URL JPEG.' },
+  { action: 'autoAnalyze', description: 'Analiza los medios del proyecto (duración, resolución, escenas, silencios, ritmo).' },
+  { action: 'autoPlan', params: { instruction: 'string' }, description: 'Genera un plan de montaje a partir de una instrucción en lenguaje natural.' },
+  { action: 'autoApply', params: { instruction: 'string (opcional si ya hay plan)' }, description: 'Analiza, planifica y aplica un montaje automático real a la timeline.' },
+  { action: 'autoUndo', description: 'Deshace el último montaje automático.' },
 ];
 
-const PANELS = ['media', 'audio', 'text', 'stickers', 'effects', 'transitions', 'captions', 'filters', 'adjust', 'templates', 'avatar'];
+const PANELS = ['media', 'audio', 'text', 'stickers', 'effects', 'transitions', 'captions', 'filters', 'adjust', 'templates', 'avatar', 'auto'];
 
 const clientStartedAt = Date.now();
 
@@ -437,6 +442,32 @@ const HANDLERS = {
       height,
       dataUrl: canvas.toDataURL('image/jpeg', 0.85),
     };
+  },
+
+  async autoAnalyze() {
+    requireProject();
+    return await analyzeProject();
+  },
+
+  async autoPlan(params = {}) {
+    requireProject();
+    const analysis = await analyzeProject();
+    const plan = await planEdit(params.instruction || '', analysis);
+    return { instruction: params.instruction || '', plan };
+  },
+
+  async autoApply(params = {}) {
+    requireProject();
+    const instruction = params.instruction || '';
+    const analysis = await analyzeProject();
+    const plan = await planEdit(instruction, analysis);
+    await applyPlan(plan, (i, total, op) => { /* progress */ });
+    return { applied: true, operations: plan.operations.map((o) => o.op) };
+  },
+
+  async autoUndo() {
+    const ok = undoAutoEdit();
+    return { undone: ok };
   },
 };
 

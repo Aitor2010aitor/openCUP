@@ -50,7 +50,7 @@ try {
   await page.waitForFunction(() => window.openCUP?.state?.project?.id);
 
   const tabs = await page.$$eval('.tools-strip .tab', (els) => els.map((el) => el.dataset.panel || el.textContent.trim()));
-  check(tabs.length === 11, `editor muestra 11 pestañas (${tabs.length})`);
+  check(tabs.length === 12, `editor muestra 12 pestañas (${tabs.length})`);
 
   const clickTab = async (panel) => {
     await page.evaluate((name) => {

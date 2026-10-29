@@ -17,6 +17,7 @@ import { openExportDialog, captureScreenshot } from './export.js';
 import { openShortcutsDialog, openAboutDialog } from './dialogs.js';
 import { openCapCutImportDialog } from './capcut.js';
 import { openAiBridgeDialog } from './ai-bridge.js';
+import { autoEditPanelHtml, wireAutoEditPanel } from './auto-edit.js';
 import { openModal, promptDialog } from './modal.js';
 import { escapeHtml, toast } from './utils.js';
 
@@ -32,6 +33,7 @@ const TABS = [
   ['adjust', 'Ajuste', 'adjust', 'Ajustar'],
   ['templates', 'Plantillas', 'templates', 'Plantillas'],
   ['avatar', 'Avatar de IA', 'avatar', 'Avatar'],
+  ['auto', 'Editor automático IA', 'sparkles', 'Auto IA'],
 ];
 
 export function mountEditor(root) {

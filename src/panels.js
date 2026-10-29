@@ -65,6 +65,7 @@ import {
   TEXT_WEIGHTS,
 } from './text-catalog.js';
 import { openCapCutImportDialog } from './capcut.js';
+import { autoEditPanelHtml, wireAutoEditPanel } from './auto-edit.js';
 import { fixWebmDuration } from './webm.js';
 import { escapeHtml, formatTime, formatBytes, toast, clamp } from './utils.js';
 
@@ -80,6 +81,7 @@ const PANEL_TITLES = {
   adjust: 'Ajuste',
   templates: 'Plantillas',
   avatar: 'Avatar de IA',
+  auto: 'Editor automático con IA',
 };
 
 const PANEL_HELP = {
@@ -94,6 +96,7 @@ const PANEL_HELP = {
   adjust: 'Ajusta brillo, contraste, saturación, opacidad, escala y rotación del clip seleccionado.',
   templates: 'Crea un proyecto nuevo con una composición inicial de texto y relación de aspecto. Después añade tus propios medios.',
   avatar: 'Añade un avatar local como capa con fondo de color o sube una foto. La generación de avatares animados con IA requiere conexión.',
+  auto: 'Analiza el material, interpreta tu instrucción y monta la timeline real. Usa modelos locales (Ollama) o externos (OpenAI) como opción.',
 };
 
 const arrayBufferToFile = (blob, name) => new File([blob], name, { type: blob.type || 'audio/webm' });
@@ -1053,6 +1056,7 @@ export function mountLeftPanel(host) {
         <div class="panel-empty">Las plantillas crean un proyecto nuevo con una composición de texto y subtítulo.</div>`;
     }
     if (panel === 'avatar') return avatarPanel();
+    if (panel === 'auto') return autoEditPanelHtml();
     return panelEmpty('Panel en construcción', 'Esta sección estará disponible próximamente.', 'layers');
   }
 
@@ -1148,6 +1152,7 @@ export function mountLeftPanel(host) {
     } else {
       renderHeader();
       body.innerHTML = bodyForPanel(state.panel);
+      if (state.panel === 'auto') wireAutoEditPanel(body);
       body.classList.toggle('cat', Boolean(body.querySelector(':scope > .cat-rail')));
       renderFoot();
     }
