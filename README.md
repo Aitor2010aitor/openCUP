@@ -126,7 +126,7 @@ Para generar además un instalador (Inno Setup 6, descargado automáticamente si
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/build-installer.ps1
 ```
 
-El resultado es `dist/openCUP-Setup-0.1.0.exe` (~24 MB): asistente en español, icono en el escritorio y en el menú Inicio, desinstalador integrado en "Aplicaciones y características". Requiere permisos de administrador para instalar en `Archivos de programa`.
+El resultado es `dist/openCUP-Setup-0.2.0.exe` (~24 MB): asistente en español, icono en el escritorio y en el menú Inicio, desinstalador integrado en "Aplicaciones y características". Requiere permisos de administrador para instalar en `Archivos de programa`.
 
 El script de compilación localiza las herramientas C++ de MSVC (Visual Studio / Build Tools), descarga el SDK de WebView2 con `tools/fetch-webview2.ps1` si falta, compila `launcher/main.cpp` e incrusta el icono (`rc.exe`), y copia la aplicación, el servidor y Node.js en `dist/openCUP`. Requiere el componente «Desarrollo de escritorio en C++» de Visual Studio. El instalador requiere Inno Setup 6 (`tools/build-installer.ps1` lo descarga e instala automáticamente si no está).
 
@@ -205,7 +205,7 @@ openCUP/
 ├─ launcher/main.cpp        Lanzador Win32 + WebView2 escrito en C++ puro
 ├─ tools/                  Pruebas de navegador y scripts de empaquetado
 │  ├─ build-desktop.ps1    Compila el .exe en C++ y monta dist/openCUP
-│  ├─ build-installer.ps1  Genera dist/openCUP-Setup-0.1.0.exe con Inno Setup 6
+│  ├─ build-installer.ps1  Genera dist/openCUP-Setup-0.2.0.exe con Inno Setup 6
 │  ├─ openCUP.iss            Script de Inno Setup (español, desinstalador)
 │  ├─ fetch-webview2.ps1   Descarga el SDK nativo de WebView2 desde nuget.org
 │  ├─ run-all-tests.ps1    Levanta el servidor y ejecuta las 11 suites
