@@ -249,6 +249,149 @@ try {
   const screenshot = await screenshotResponse.json();
   check(screenshotResponse.ok && String(screenshot.result?.dataUrl || '').startsWith('data:image/jpeg'), 'comando screenshot devuelve JPEG');
 
+  // ---- Transformación estilo CapCut: escala, fotogramas clave y alineación ----
+  await page.evaluate(() => window.cacup.command('newProject', { name: 'Transformación CapCut' }));
+  await page.waitForFunction(() => window.cacup.state.view === 'editor');
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const transformClipId = await page.evaluate(async () => {
+    const added = await window.cacup.command('addText', { content: 'CACUP', start: 0, duration: 5 });
+    window.cacup.command('selectClip', { id: added.clip.id });
+    window.cacup.command('seek', { time: 0.5 });
+    return added.clip.id;
+  });
+  check(typeof transformClipId === 'string', 'clip de texto creado para probar transformación');
+
+  const summaryInfo = await page.evaluate(() => {
+    const group = [...document.querySelectorAll('[data-details] .tx-group')]
+      .find((item) => item.querySelector('summary')?.textContent.trim() === 'Transformación');
+    if (!group) return null;
+    const reset = group.querySelector('.sec-reset');
+    return {
+      text: group.querySelector('summary').textContent.trim(),
+      resetIconOnly: Boolean(reset) && reset.textContent.trim() === '',
+      mixSection: Boolean(document.querySelector('[data-details] details[data-section="mix"]')),
+    };
+  });
+  check(summaryInfo?.text === 'Transformación' && summaryInfo.resetIconOnly && summaryInfo.mixSection, 'resumen Transformación íntegro y restablecer solo icono', JSON.stringify(summaryInfo));
+
+  let scaleRows = await page.evaluate(() => ({
+    uniform: document.querySelectorAll('.dt-slider [data-prop="scale"]').length,
+    x: document.querySelectorAll('[data-spin="scaleX"]').length,
+    y: document.querySelectorAll('[data-spin="scaleY"]').length,
+  }));
+  check(scaleRows.uniform === 1 && scaleRows.x === 0 && scaleRows.y === 0, 'con escala uniforme activa hay una sola fila Escala', JSON.stringify(scaleRows));
+  await page.click('[data-uniform]');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  scaleRows = await page.evaluate(() => ({
+    uniform: document.querySelectorAll('.dt-slider [data-prop="scale"]').length,
+    x: document.querySelectorAll('[data-spin="scaleX"]').length,
+    y: document.querySelectorAll('[data-spin="scaleY"]').length,
+  }));
+  check(scaleRows.uniform === 0 && scaleRows.x === 1 && scaleRows.y === 1, 'al desactivar la escala uniforme aparecen Escala X e Y', JSON.stringify(scaleRows));
+  await page.click('[data-uniform]');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  // Fotogramas clave de escala: 100% en t=0.5, 200% en t=2.5, interpolación en t=1.5.
+  const keyframeFlow = await page.evaluate(async () => {
+    const nap = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const spin = () => document.querySelector('[data-spin="scale"]');
+    const setSpin = (value) => {
+      const input = spin();
+      input.value = String(value);
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    window.cacup.command('seek', { time: 0.5 });
+    await nap(80);
+    document.querySelector('[data-kf-toggle="scale"]').click(); // clave al valor efectivo (100%)
+    await nap(80);
+    window.cacup.command('seek', { time: 2.5 });
+    await nap(80);
+    setSpin(200); // la propiedad ya tiene keyframes: escribe una clave con 200%
+    await nap(80);
+    window.cacup.command('seek', { time: 1.5 });
+    await nap(120);
+    const clip = window.cacup.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.cacup.state.selection);
+    const mid = Number(spin().value);
+    document.querySelector('[data-kf-nav="1"]').click();
+    await nap(120);
+    return { count: clip.keyframes?.scale?.length || 0, mid, afterNext: window.cacup.state.playhead };
+  });
+  check(keyframeFlow.count === 2, `escala con 2 fotogramas clave (${keyframeFlow.count})`);
+  check(Math.abs(keyframeFlow.mid - 150) < 1, 'la escala se interpola entre fotogramas (150% a mitad de camino)', String(keyframeFlow.mid));
+  check(Math.abs(keyframeFlow.afterNext - 2.5) < 0.01, 'el botón › salta al fotograma clave siguiente (t=2.5)', String(keyframeFlow.afterNext));
+
+  // Los rombos de fotograma clave se pintan sobre el clip en la línea de tiempo.
+  const diamonds = await page.evaluate(() => document.querySelectorAll('.clip .kf-diamond').length);
+  check(diamonds === 2, `la línea de tiempo muestra 2 rombos de fotograma clave (${diamonds})`);
+
+  // El cajón numérico escribe propiedades directamente (y sin keyframes).
+  const spinWrite = await page.evaluate(async () => {
+    const nap = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const input = document.querySelector('[data-spin="y"]');
+    input.value = '-12';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await nap(80);
+    const clip = window.cacup.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.cacup.state.selection);
+    return { y: clip.y };
+  });
+  check(Math.abs(spinWrite.y + 12) < 0.0001, 'el cajón numérico Y escribe la posición', JSON.stringify(spinWrite));
+
+  // Alineación en el lienzo (proyecto 16:9 por defecto).
+  const alignFlow = await page.evaluate(async () => {
+    const nap = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const clipOf = () => window.cacup.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.cacup.state.selection);
+    document.querySelector('[data-align="left"]').click();
+    await nap(80);
+    const leftX = clipOf().x;
+    document.querySelector('[data-align="center"]').click();
+    await nap(80);
+    const centerX = clipOf().x;
+    document.querySelector('[data-align="right"]').click();
+    await nap(80);
+    const rightX = clipOf().x;
+    document.querySelector('[data-align="bottom"]').click();
+    await nap(80);
+    const bottomY = clipOf().y;
+    return { leftX, centerX, rightX, bottomY };
+  });
+  check(alignFlow.leftX < 0 && alignFlow.centerX === 0 && alignFlow.rightX > 0, 'alineación horizontal: izquierda < 0, centro = 0, derecha > 0', JSON.stringify(alignFlow));
+  check(alignFlow.bottomY > 0, 'alineación inferior coloca y positiva', String(alignFlow.bottomY));
+
+  // Restablecer transformación vuelve a los valores iniciales y borra claves.
+  await page.click('[data-transform-reset]');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const resetState = await page.evaluate(() => {
+    const clip = window.cacup.state.project.tracks.flatMap((t) => t.clips).find((c) => c.id === window.cacup.state.selection);
+    return { x: clip.x, y: clip.y, scale: clip.scale, rotate: clip.rotate, kf: Object.keys(clip.keyframes || {}).length };
+  });
+  check(resetState.x === 0 && resetState.y === 0 && resetState.scale === 1 && resetState.rotate === 0 && resetState.kf === 0, 'restablecer transformación limpia valores y fotogramas clave', JSON.stringify(resetState));
+
+  // La Mezcla del texto usa el deslizador de opacidad con cajón y control de fotogramas.
+  const mixRow = await page.evaluate(() => ({
+    slider: document.querySelectorAll('[data-details] [data-prop="text.opacity"]').length,
+    spin: document.querySelectorAll('[data-details] [data-spin="text.opacity"]').length,
+    kf: document.querySelectorAll('[data-details] [data-kf-toggle="text.opacity"]').length,
+  }));
+  check(mixRow.slider === 1 && mixRow.spin === 1 && mixRow.kf === 1, 'la sección Mezcla del texto tiene deslizador, cajón y fotograma clave', JSON.stringify(mixRow));
+
+  // El estado abierto/cerrado de las secciones sobrevive a un re-render.
+  const sectionPersistence = await page.evaluate(async () => {
+    const nap = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const group = document.querySelector('[data-details] details[data-section="transform"]');
+    group.open = false;
+    await nap(120); // el evento toggle se lanza de forma asíncrona
+    window.cacup.command('selectClip', { id: null });
+    await nap(120);
+    const textId = window.cacup.state.project.tracks.flatMap((t) => t.clips).find((c) => c.kind === 'text').id;
+    window.cacup.command('selectClip', { id: textId });
+    await nap(150);
+    const after = document.querySelector('[data-details] details[data-section="transform"]');
+    return after ? after.open : null;
+  });
+  check(sectionPersistence === false, 'la sección Transformación permanece cerrada tras re-renderizar', String(sectionPersistence));
+
+  await page.screenshot({ path: path.join(SHOTS, 'new-transformacion.png') });
+
   check(errors.length === 0, `sin errores de consola (${errors.length})`);
   if (errors.length) notes.push(...errors.map((error) => `  ${error}`));
 } catch (error) {

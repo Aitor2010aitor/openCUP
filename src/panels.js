@@ -21,7 +21,20 @@ import {
   FILTERS,
   CAPCUT_FILTER_CATEGORIES,
   TEXT_DEFAULTS,
+  RESOLUTIONS,
+  ASPECTS,
 } from './store.js';
+import {
+  transformAt,
+  hasKeyframes,
+  keyframeCount,
+  keyframeIndexAt,
+  keyframeValue,
+  nextKeyframeStore,
+  withoutKeyframe,
+  neighborKeyframe,
+} from './keyframes.js';
+import { clipLayerBox } from './renderer.js';
 import { icon } from './icons.js';
 import { openModal, confirmDialog, promptDialog } from './modal.js';
 import { openExportDialog } from './export.js';
@@ -1700,6 +1713,204 @@ function numberField(label, prop, value, min, max, step = 1) {
     </div>`;
 }
 
+/* ---------------- Controles de Detalles con estética de CapCut ----------------
+   Fila: etiqueta a la izquierda, control a la derecha y, al fondo del todo,
+   los tres botones de fotograma clave (‹ ◇ ›) de esa propiedad. */
+
+function toRaw(stored, factor) {
+  return Math.round((stored / (factor || 1)) * 1000) / 1000;
+}
+
+function baseValueFor(clip, prop) {
+  if (prop.startsWith('adjust.')) {
+    const key = prop.slice(7);
+    const fallback = key === 'brightness' || key === 'contrast' || key === 'saturate' ? 100 : 0;
+    return clip.adjust?.[key] ?? fallback;
+  }
+  switch (prop) {
+    case 'x': return clip.x || 0;
+    case 'y': return clip.y || 0;
+    case 'scale': return clip.scale ?? 1;
+    case 'scaleX': return clip.scaleX ?? clip.scale ?? 1;
+    case 'scaleY': return clip.scaleY ?? clip.scale ?? 1;
+    case 'rotate': return clip.rotate || 0;
+    case 'opacity': return clip.opacity ?? 1;
+    case 'text.opacity': return clip.text?.opacity ?? 1;
+    case 'volume': return clip.volume ?? 1;
+    case 'speed': return clip.speed ?? 1;
+    default: return 0;
+  }
+}
+
+/* Valor que se muestra en los controles: el efectivo en el cabezal actual. */
+function effValue(clip, prop, base) {
+  return hasKeyframes(clip, prop) ? keyframeValue(clip, prop, state.playhead, base) : base;
+}
+
+function spinBox(prop, { raw, min, max, step = 1, unit = '', factor = 1, prefix = '', cls = '' }) {
+  return `<label class="spin ${cls}">
+    ${prefix ? `<span class="spin-prefix">${prefix}</span>` : ''}
+    <input type="number" data-spin="${prop}" data-spin-factor="${factor}" data-spin-unit="${unit}"
+      min="${min}" max="${max}" step="${step}" value="${raw}" />
+    ${unit ? `<span class="spin-unit">${unit}</span>` : ''}
+  </label>`;
+}
+
+function kfControls(clip, prop) {
+  const props = prop.split(',');
+  const count = props.reduce((sum, item) => sum + keyframeCount(clip, item), 0);
+  const active = count > 0 && props.every((item) => keyframeIndexAt(clip, item, state.playhead) >= 0);
+  return `<span class="kf-ctl${count ? ' has' : ''}">
+    <button class="kf-btn" type="button" data-kf-nav="-1" data-kf-prop="${prop}" title="Fotograma clave anterior" ${count ? '' : 'disabled'}>${icon('chevronLeft', 11)}</button>
+    <button class="kf-btn kf-add${active ? ' on' : ''}" type="button" data-kf-toggle="${prop}" title="${active ? 'Quitar fotograma clave' : 'Agregar fotograma clave'}" aria-pressed="${active}"><i></i></button>
+    <button class="kf-btn" type="button" data-kf-nav="1" data-kf-prop="${prop}" title="Fotograma clave siguiente" ${count ? '' : 'disabled'}>${icon('chevronRight', 11)}</button>
+  </span>`;
+}
+
+function dtSliderRow(label, prop, baseStored, { min, max, step = 1, factor = 1, unit = '', clip }) {
+  const raw = toRaw(effValue(clip, prop, baseStored), factor);
+  return `<div class="dt-row stacked dt-slider">
+    <span class="dt-lbl">${label}</span>
+    <div class="dt-line">
+      <input class="dt-range" type="range" data-prop="${prop}" data-factor="${factor}" data-unit="${unit}" min="${min}" max="${max}" step="${step}" value="${raw}" />
+      ${spinBox(prop, { raw, min, max, step, unit, factor, cls: 'spin-val' })}
+      ${kfControls(clip, prop)}
+    </div>
+  </div>`;
+}
+
+function canvasSize() {
+  const base = RESOLUTIONS[state.project?.resolution] || RESOLUTIONS['1080p'];
+  const aspect = ASPECTS[state.project?.ratio] || 16 / 9;
+  if (aspect >= base.width / base.height) return { width: base.width, height: base.width / aspect };
+  return { width: base.height * aspect, height: base.height };
+}
+
+/* Tamaño del clip en el lienzo (%), para alinearlo como en CapCut. */
+function layerSizePct(clip) {
+  const { width, height } = canvasSize();
+  const aspect = width / height;
+  const box = clipLayerBox(clip, width, height, state.playhead);
+  if (box) {
+    return {
+      wPct: (box.width * (box.scaleX ?? box.scale) / width) * 100,
+      hPct: (box.height * (box.scaleY ?? box.scale) / height) * 100,
+      extraX: (clip.text?.x || clip.sticker?.x || 0),
+      extraY: (clip.text?.y || clip.sticker?.y || 0),
+    };
+  }
+  const media = clip.mediaId ? state.media?.get(clip.mediaId) : null;
+  const mediaAspect = media && media.width && media.height ? media.width / media.height : aspect;
+  const tr = transformAt(clip, state.playhead);
+  let mediaWidth;
+  let mediaHeight;
+  if (mediaAspect >= aspect) {
+    mediaWidth = width;
+    mediaHeight = width / mediaAspect;
+  } else {
+    mediaHeight = height;
+    mediaWidth = height * mediaAspect;
+  }
+  return {
+    wPct: (mediaWidth * tr.scaleX / width) * 100,
+    hPct: (mediaHeight * tr.scaleY / height) * 100,
+    extraX: 0,
+    extraY: 0,
+  };
+}
+
+function alignPatch(clip, mode) {
+  const { wPct, hPct, extraX, extraY } = layerSizePct(clip);
+  switch (mode) {
+    case 'left': return { x: Math.round((-wPct / 2 - extraX) * 100) / 100 };
+    case 'center': return { x: Math.round((-extraX) * 100) / 100 };
+    case 'right': return { x: Math.round((wPct / 2 - extraX) * 100) / 100 };
+    case 'top': return { y: Math.round((-hPct / 2 - extraY) * 100) / 100 };
+    case 'middle': return { y: Math.round((-extraY) * 100) / 100 };
+    case 'bottom': return { y: Math.round((hPct / 2 - extraY) * 100) / 100 };
+    default: return {};
+  }
+}
+
+/* Patch para escribir una propiedad respetando los fotogramas clave:
+   si la prop ya tiene keyframes, se inserta/actualiza uno en el cabezal. */
+function writeClipProp(clip, prop, value) {
+  if (hasKeyframes(clip, prop)) return { keyframes: nextKeyframeStore(clip, prop, state.playhead, value) };
+  if (prop === 'text.opacity') return { text: { opacity: value } };
+  return { [prop]: value };
+}
+
+function alignBar() {
+  const modes = [
+    ['left', 'Alinear a la izquierda', 'alignLeft'],
+    ['center', 'Alinear al medio', 'alignCenterH'],
+    ['right', 'Alinear a la derecha', 'alignRight'],
+    ['top', 'Alinear arriba', 'alignTop'],
+    ['middle', 'Alinear al centro', 'alignCenterV'],
+    ['bottom', 'Alinear abajo', 'alignBottom'],
+  ];
+  return `<div class="align-bar" role="toolbar" aria-label="Alinear en el lienzo">
+    ${modes.map(([mode, label, name]) => `<button class="align-btn" type="button" data-align="${mode}" title="${label}">${icon(name, 14)}</button>`).join('')}
+  </div>`;
+}
+
+/* Filas del bloque Transformación (compartidas por imagen/vídeo, sticker y texto). */
+function transformInner(clip, { text = false } = {}) {
+  const uniform = clip.uniform !== false;
+  const scaleRow = uniform
+    ? dtSliderRow('Escala', 'scale', clip.scale ?? 1, { min: 10, max: 400, factor: 0.01, unit: '%', clip })
+    : [
+      dtSliderRow('Escala X', 'scaleX', clip.scaleX ?? clip.scale ?? 1, { min: 10, max: 400, factor: 0.01, unit: '%', clip }),
+      dtSliderRow('Escala Y', 'scaleY', clip.scaleY ?? clip.scale ?? 1, { min: 10, max: 400, factor: 0.01, unit: '%', clip }),
+    ].join('');
+  const rotate = effValue(clip, 'rotate', clip.rotate || 0);
+  const dialRot = Math.round(((rotate % 360) + 360) % 360);
+  const flipRow = text ? `
+    <div class="tx-chip-row">
+      <button class="tx-chip${clip.text?.flipX ? ' active' : ''}" data-text-toggle="flipX">⇋ Voltear horizontal</button>
+      <button class="tx-chip${clip.text?.flipY ? ' active' : ''}" data-text-toggle="flipY">⇵ Voltear vertical</button>
+    </div>` : '';
+  return `
+    ${scaleRow}
+    <div class="dt-row">
+      <span class="dt-lbl">Escala uniforme</span>
+      <div class="dt-ctl end"><button class="switch ${uniform ? 'on' : ''}" type="button" data-uniform aria-pressed="${uniform}" aria-label="Escala uniforme"></button></div>
+    </div>
+    <div class="dt-row">
+      <span class="dt-lbl">Posición</span>
+      <div class="dt-ctl">
+        <div class="dt-inline">
+          ${spinBox('x', { raw: toRaw(effValue(clip, 'x', clip.x || 0), 1), min: -100, max: 100, step: 1, unit: '%', prefix: 'X' })}
+          ${spinBox('y', { raw: toRaw(effValue(clip, 'y', clip.y || 0), 1), min: -100, max: 100, step: 1, unit: '%', prefix: 'Y' })}
+        </div>
+        ${kfControls(clip, 'x,y')}
+      </div>
+    </div>
+    <div class="dt-row">
+      <span class="dt-lbl">Rotación del plano</span>
+      <div class="dt-ctl">
+        ${spinBox('rotate', { raw: toRaw(rotate, 1), min: -360, max: 360, step: 0.1, unit: '°' })}
+        <button class="dial-btn" type="button" data-rotate-dial title="Arrastra para girar el plano"><i style="--dial:${dialRot}deg"></i></button>
+        ${kfControls(clip, 'rotate')}
+      </div>
+    </div>
+    ${alignBar()}
+    ${flipRow}`;
+}
+
+/* Secciones Transformación + Mezcla para los clips que no son texto. */
+function transformSection(clip) {
+  return `
+    <details class="tx-group" open data-section="transform">
+      <summary>Transformación<button class="sec-reset" type="button" data-transform-reset title="Restablecer transformación">${icon('rotate', 13)}</button></summary>
+      ${transformInner(clip)}
+    </details>
+    <details class="tx-group" open data-section="mix">
+      <summary>Mezcla<button class="sec-reset" type="button" data-mix-reset title="Restablecer mezcla">${icon('rotate', 13)}</button></summary>
+      ${dtSliderRow('Opacidad', 'opacity', clip.opacity ?? 1, { min: 0, max: 100, factor: 0.01, unit: '%', clip })}
+    </details>`;
+}
+
 function colorValue(color) {
   return /^#[0-9a-fA-F]{6}$/.test(color || '') ? color : '#ffffff';
 }
@@ -1857,18 +2068,7 @@ export function mountDetailsPanel(host) {
         ${detailRange('Sepia', 'adjust.sepia', Math.round(clip.adjust?.sepia ?? 0), 0, 100, 1, 1, Math.round(clip.adjust?.sepia ?? 0), '%')}
         ${detailRange('Tono', 'adjust.hue', Math.round(clip.adjust?.hue ?? 0), -180, 180, 1, 1, Math.round(clip.adjust?.hue ?? 0), '°')}
       ` : ''}
-      ${!isText ? `
-      <div class="details-section">Transformación</div>
-      ${detailRange('Escala', 'scale', Math.round((clip.scale ?? 1) * 100), 10, 400, 1, 0.01, Math.round((clip.scale ?? 1) * 100), '%')}
-      ${detailRange('Rotación', 'rotate', Math.round(clip.rotate || 0), -180, 180, 1, 1, Math.round(clip.rotate || 0), '°')}
-      ${detailRange('Opacidad', 'opacity', Math.round((clip.opacity ?? 1) * 100), 0, 100, 1, 0.01, Math.round((clip.opacity ?? 1) * 100), '%')}
-      <div class="prop">
-        <span class="tx-lbl">Posición</span>
-        <div class="prop-grid">
-          ${numberField('X', 'x', clip.x || 0, -100, 100, 1)}
-          ${numberField('Y', 'y', clip.y || 0, -100, 100, 1)}
-        </div>
-      </div>` : ''}
+      ${!isText ? transformSection(clip) : ''}
       ${clip.kind === 'video' || isAudio ? `
         <div class="details-section">Audio</div>
         ${detailRange('Volumen', 'volume', Math.round((clip.volume ?? 1) * 100), 0, 100, 1, 0.01, Math.round((clip.volume ?? 1) * 100), '%')}
@@ -1982,22 +2182,14 @@ export function mountDetailsPanel(host) {
         <div class="tx-style-grid">${styleSwatches}</div>
       </details>
 
-      <details class="tx-group" open>
-        <summary>Transformación</summary>
-        ${textRangeField('Escala', 'scale', clip.scale ?? 1, 10, 400, 1, 0.01, 'clip')}
-        <div class="tx-switch-row"><span>Escala uniforme</span><button class="switch on" disabled title="Cacup mantiene la escala uniforme para el texto"></button></div>
-        ${textRangeField('Posición X', 'x', clip.x || 0, -100, 100, 1, 1, 'clip', '%')}
-        ${textRangeField('Posición Y', 'y', clip.y || 0, -100, 100, 1, 1, 'clip', '%')}
-        ${textRangeField('Rotación del plano', 'rotate', clip.rotate || 0, -180, 180, 1, 1, 'clip', '°')}
-        <div class="tx-chip-row">
-          <button class="tx-chip${text.flipX ? ' active' : ''}" data-text-toggle="flipX">⇋ Voltear horizontal</button>
-          <button class="tx-chip${text.flipY ? ' active' : ''}" data-text-toggle="flipY">⇵ Voltear vertical</button>
-        </div>
+      <details class="tx-group" open data-section="transform">
+        <summary>Transformación<button class="sec-reset" type="button" data-transform-reset title="Restablecer transformación">${icon('rotate', 13)}</button></summary>
+        ${transformInner(clip, { text: true })}
       </details>
 
-      <details class="tx-group" open>
-        <summary>Mezcla</summary>
-        ${textRangeField('Opacidad', 'opacity', text.opacity, 0, 100, 1, 0.01)}
+      <details class="tx-group" open data-section="mix">
+        <summary>Mezcla<button class="sec-reset" type="button" data-mix-reset title="Restablecer mezcla">${icon('rotate', 13)}</button></summary>
+        ${dtSliderRow('Opacidad', 'text.opacity', text.opacity, { min: 0, max: 100, factor: 0.01, unit: '%', clip })}
       </details>
 
       <details class="tx-group">
@@ -2119,11 +2311,21 @@ export function mountDetailsPanel(host) {
     foot.innerHTML = `<button class="modify-btn" data-edit-project>Modificar</button>`;
   }
 
+  /* Estado abierto/cerrado de las secciones con ancla (Transformación, Mezcla…):
+     se conserva aunque el panel se vuelva a pintar por un cambio de selección. */
+  const sectionState = {};
+
   function render() {
     if (suppressRender) return;
     const scrollTop = details.scrollTop;
+    for (const el of details.querySelectorAll('details[data-section]')) {
+      sectionState[el.dataset.section] = el.open;
+    }
     const found = selectedClip();
     details.innerHTML = found ? clipMarkup(found) : projectMarkup();
+    for (const el of details.querySelectorAll('details[data-section]')) {
+      if (sectionState[el.dataset.section] !== undefined) el.open = sectionState[el.dataset.section];
+    }
     renderFoot();
     details.scrollTop = scrollTop;
   }
@@ -2131,25 +2333,68 @@ export function mountDetailsPanel(host) {
   function applyRange(input) {
     const found = selectedClip();
     if (!found) return;
+    const clip = found.clip;
     const key = input.dataset.prop;
     const factor = Number(input.dataset.factor || 1);
     const value = Number(input.value) * factor;
     suppressRender = true;
     if (key.startsWith('adjust.')) {
-      updateClip(found.clip.id, { adjust: { [key.slice(7)]: value } }, { history: false });
+      updateClip(clip.id, { adjust: { [key.slice(7)]: value } }, { history: false });
     } else {
-      updateClip(found.clip.id, { [key]: value }, { history: false });
+      // Respetando fotogramas clave: si la prop ya tiene keyframes se
+      // inserta/actualiza uno en el cabezal (igual que CapCut).
+      updateClip(clip.id, writeClipProp(clip, key, value), { history: false });
     }
     suppressRender = false;
+    const unit = input.dataset.unit || (key === 'rotate' ? '°' : key === 'speed' ? '×' : '%');
+    const display = key === 'speed'
+      ? Number(value).toFixed(2)
+      : factor === 1
+        ? Math.round(value)
+        : Math.round(value * 100);
     const readout = details.querySelector(`[data-readout="${key}"]`);
-    if (readout) {
-      const unit = input.dataset.unit || (key === 'rotate' ? '°' : key === 'speed' ? '×' : '%');
-      const display = key === 'speed'
-        ? Number(value).toFixed(2)
-        : factor === 1
-          ? Math.round(value)
-          : Math.round(value * 100);
-      readout.textContent = `${display}${unit}`;
+    if (readout) readout.textContent = `${display}${unit}`;
+    syncPeerControls(key, input, toRaw(value, factor));
+  }
+
+  /* Mantiene el slider (.dt-range) y el cajón numérico ([data-spin]) sincronizados. */
+  function syncPeerControls(prop, origin, raw) {
+    if (origin.matches('.dt-range')) {
+      const spin = details.querySelector(`[data-spin="${prop}"]`);
+      if (spin) spin.value = raw;
+      return;
+    }
+    const range = details.querySelector(`.dt-range[data-prop="${prop}"]`);
+    if (range) range.value = raw;
+  }
+
+  /* Refresca los controles de transformación sin re-renderizar el panel:
+     lo usamos en cada tick para que el cabezal actualice valores efectivos. */
+  function syncTransformControls() {
+    if (!details.querySelector('.dt-slider')) return;
+    const found = selectedClip();
+    if (!found) return;
+    const clip = found.clip;
+    for (const input of details.querySelectorAll('.dt-range[data-prop], [data-spin]')) {
+      const prop = input.dataset.prop || input.dataset.spin;
+      const factor = Number(input.dataset.factor || input.dataset.spinFactor || 1);
+      const raw = toRaw(effValue(clip, prop, baseValueFor(clip, prop)), factor);
+      if (Number(input.value) !== raw) input.value = raw;
+    }
+    const dialNeedle = details.querySelector('.dial-btn i');
+    if (dialNeedle) {
+      const rot = effValue(clip, 'rotate', clip.rotate || 0);
+      dialNeedle.style.setProperty('--dial', `${Math.round((((rot % 360) + 360) % 360) * 10) / 10}deg`);
+    }
+    for (const button of details.querySelectorAll('[data-kf-toggle]')) {
+      const props = button.dataset.kfToggle.split(',');
+      const active = props.every((prop) => keyframeIndexAt(clip, prop, state.playhead) >= 0);
+      button.classList.toggle('on', active);
+      button.setAttribute('aria-pressed', String(active));
+      button.title = active ? 'Quitar fotograma clave' : 'Agregar fotograma clave';
+    }
+    for (const button of details.querySelectorAll('[data-kf-nav]')) {
+      button.disabled = button.dataset.kfProp.split(',').every((prop) => keyframeCount(clip, prop) === 0);
     }
   }
 
@@ -2159,6 +2404,109 @@ export function mountDetailsPanel(host) {
     if (event.target.closest('[data-clip-duplicate]')) { duplicateSelected(); return; }
     if (event.target.closest('[data-export-video]')) { openExportDialog(); return; }
     if (event.target.closest('[data-details-help]')) { openShortcutsDialog(); return; }
+    const uniformButton = event.target.closest('[data-uniform]');
+    if (uniformButton) {
+      const found = selectedClip();
+      if (!found) return;
+      const clip = found.clip;
+      const next = !(clip.uniform !== false);
+      const tr = transformAt(clip, state.playhead);
+      const patch = { uniform: next };
+      if (!next) {
+        patch.scaleX = clip.scaleX ?? tr.scaleX;
+        patch.scaleY = clip.scaleY ?? tr.scaleY;
+      }
+      updateClip(clip.id, patch);
+      return;
+    }
+    const transformReset = event.target.closest('[data-transform-reset]');
+    if (transformReset) {
+      // Está dentro de un <summary>: evitamos que el clic cierre la sección.
+      event.preventDefault();
+      event.stopPropagation();
+      const found = selectedClip();
+      if (!found) return;
+      updateClip(found.clip.id, {
+        x: 0,
+        y: 0,
+        scale: 1,
+        scaleX: undefined,
+        scaleY: undefined,
+        rotate: 0,
+        uniform: true,
+        keyframes: Object.fromEntries(Object.entries(found.clip.keyframes || {}).filter(([prop]) => prop !== 'x' && prop !== 'y' && prop !== 'scale' && prop !== 'scaleX' && prop !== 'scaleY' && prop !== 'rotate')),
+      });
+      toast('Transformación restablecida');
+      return;
+    }
+    const mixReset = event.target.closest('[data-mix-reset]');
+    if (mixReset) {
+      event.preventDefault();
+      event.stopPropagation();
+      const found = selectedClip();
+      if (!found) return;
+      const isText = found.clip.kind === 'text';
+      const key = isText ? 'text.opacity' : 'opacity';
+      updateClip(found.clip.id, isText
+        ? { text: { opacity: 1 }, keyframes: withoutKeyframe(found.clip, key, state.playhead) }
+        : { opacity: 1, keyframes: withoutKeyframe(found.clip, key, state.playhead) });
+      toast('Mezcla restablecida');
+      return;
+    }
+    const alignButton = event.target.closest('[data-align]');
+    if (alignButton) {
+      const found = selectedClip();
+      if (!found) return;
+      const patch = alignPatch(found.clip, alignButton.dataset.align);
+      updateClip(found.clip.id, patch);
+      return;
+    }
+    const kfToggle = event.target.closest('[data-kf-toggle]');
+    if (kfToggle) {
+      const found = selectedClip();
+      if (!found) return;
+      const clip = found.clip;
+      const props = kfToggle.dataset.kfToggle.split(',');
+      const removing = props.every((prop) => keyframeIndexAt(clip, prop, state.playhead) >= 0);
+      let store = clip.keyframes || {};
+      for (const prop of props) {
+        store = removing
+          ? withoutKeyframe({ keyframes: store }, prop, state.playhead)
+          : nextKeyframeStore({ keyframes: store }, prop, state.playhead, effValue(clip, prop, baseValueFor(clip, prop)));
+      }
+      updateClip(clip.id, { keyframes: store });
+      return;
+    }
+    const kfNav = event.target.closest('[data-kf-nav]');
+    if (kfNav) {
+      const found = selectedClip();
+      if (!found) return;
+      const clip = found.clip;
+      const props = kfNav.dataset.kfProp.split(',');
+      const direction = Number(kfNav.dataset.kfNav) || 1;
+      const targets = props
+        .map((prop) => neighborKeyframe(clip, prop, state.playhead, direction))
+        .filter(Boolean);
+      if (!targets.length) return;
+      const time = direction > 0
+        ? Math.min(...targets.map((point) => point.t))
+        : Math.max(...targets.map((point) => point.t));
+      seek(time);
+      return;
+    }
+    if (event.target.closest('[data-rotate-dial]')) {
+      const found = selectedClip();
+      if (!found) return;
+      const dial = event.target.closest('[data-rotate-dial]');
+      const rect = dial.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const angle = Math.round((Math.atan2(event.clientY - cy, event.clientX - cx) * 180) / Math.PI + 90);
+      const value = ((angle % 360) + 360) % 360;
+      const rotated = value > 180 ? value - 360 : value;
+      updateClip(found.clip.id, writeClipProp(found.clip, 'rotate', rotated));
+      return;
+    }
     const toggle = event.target.closest('[data-text-toggle]');
     if (toggle) {
       const found = selectedClip();
@@ -2168,11 +2516,11 @@ export function mountDetailsPanel(host) {
       updateClip(found.clip.id, { text: { [field]: !current } });
       return;
     }
-    const alignButton = event.target.closest('[data-text-align]');
-    if (alignButton) {
+    const textAlignButton = event.target.closest('[data-text-align]');
+    if (textAlignButton) {
       const found = selectedClip();
       if (!found) return;
-      updateClip(found.clip.id, { text: { align: alignButton.dataset.textAlign } });
+      updateClip(found.clip.id, { text: { align: textAlignButton.dataset.textAlign } });
       return;
     }
     const caseButton = event.target.closest('[data-text-case]');
@@ -2390,11 +2738,41 @@ export function mountDetailsPanel(host) {
       const key = target.dataset.propNumber;
       const value = Number(target.value);
       updateClip(found.clip.id, { [key]: value });
+      return;
+    }
+    if (target.matches('[data-spin]')) {
+      const clip = found.clip;
+      const key = target.dataset.spin;
+      const factor = Number(target.dataset.spinFactor) || 1;
+      const min = target.min !== '' ? Number(target.min) : -Infinity;
+      const max = target.max !== '' ? Number(target.max) : Infinity;
+      const clamped = Math.min(max, Math.max(min, Number(target.value)));
+      const stored = Math.round(clamped * factor * 1000) / 1000;
+      // La escala uniforme escribe la misma escala en ambos ejes.
+      if (key === 'scale' && clip.uniform !== false) {
+        updateClip(clip.id, writeClipProp(clip, 'scale', stored));
+      } else if (key === 'opacity' && clip.kind === 'text') {
+        updateClip(clip.id, writeClipProp(clip, 'text.opacity', stored));
+      } else {
+        updateClip(clip.id, writeClipProp(clip, key, stored));
+      }
+      syncPeerControls(key, target, stored);
     }
   });
 
+  /* `toggle` no burbujea: lo capturamos en fase de captura desde el contenedor. */
+  details.addEventListener('toggle', (event) => {
+    const el = event.target;
+    if (el instanceof HTMLDetailsElement && el.dataset.section) {
+      sectionState[el.dataset.section] = el.open;
+    }
+  }, true);
+
   subscriptions.push(on('project', render));
   subscriptions.push(on('selection', render));
+  // Los fotogramas clave hacen variar los valores con el cabezal: sincronizamos
+  // sliders, cajones y el dial sin re-pintar el panel entero.
+  subscriptions.push(on('tick', syncTransformControls));
 
   render();
 

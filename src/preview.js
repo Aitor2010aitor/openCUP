@@ -15,6 +15,7 @@ import {
   formatTime,
 } from './store.js';
 import { MediaPool, renderFrame, activeLayers, clipLayerBox } from './renderer.js';
+import { transformAt, hasKeyframes, setKeyframe, writeProp } from './keyframes.js';
 import { icon } from './icons.js';
 import { toast } from './utils.js';
 import { captureScreenshot } from './export.js';
@@ -116,7 +117,7 @@ export function mountPreview(host) {
   }
 
   function boxFor(clip, rect) {
-    return clipLayerBox(clip, rect.width, rect.height);
+    return clipLayerBox(clip, rect.width, rect.height, state.playhead);
   }
 
   function selectedVisual() {
@@ -154,8 +155,8 @@ export function mountPreview(host) {
     frame.dataset.kind = box.kind;
     frame.style.left = `${box.cx}px`;
     frame.style.top = `${box.cy}px`;
-    frame.style.width = `${Math.max(18, box.width * box.scale)}px`;
-    frame.style.height = `${Math.max(18, box.height * box.scale)}px`;
+    frame.style.width = `${Math.max(18, box.width * (box.scaleX ?? box.scale))}px`;
+    frame.style.height = `${Math.max(18, box.height * (box.scaleY ?? box.scale))}px`;
     frame.style.transform = `translate(-50%, -50%) rotate(${box.rotation}deg)`;
   }
 
@@ -186,6 +187,7 @@ export function mountPreview(host) {
   function startDrag(mode, clip, point, rect) {
     const box = boxFor(clip, rect);
     if (!box) return;
+    const tr = transformAt(clip, state.playhead);
     drag = {
       mode,
       clip,
@@ -194,10 +196,22 @@ export function mountPreview(host) {
       moved: false,
       start: {
         pointer: point,
-        x: clip.x || 0,
-        y: clip.y || 0,
-        scale: clip.scale ?? 1,
-        rotate: clip.rotate || 0,
+        x: tr.x,
+        y: tr.y,
+        scale: tr.scaleX,
+        scaleX: tr.scaleX,
+        scaleY: tr.scaleY,
+        uniform: clip.uniform !== false,
+        rotate: tr.rotate,
+        base: {
+          x: clip.x,
+          y: clip.y,
+          scale: clip.scale,
+          scaleX: clip.scaleX,
+          scaleY: clip.scaleY,
+          rotate: clip.rotate,
+        },
+        keyframes: JSON.parse(JSON.stringify(clip.keyframes || {})),
         distance: Math.max(6, Math.hypot(point.x - box.cx, point.y - box.cy)),
         angle: Math.atan2(point.y - box.cy, point.x - box.cx),
       },
@@ -233,14 +247,26 @@ export function mountPreview(host) {
       } else {
         guideH.hidden = true;
       }
-      clip.x = Math.round(x * 100) / 100;
-      clip.y = Math.round(y * 100) / 100;
-      drag.moved = drag.moved || Math.abs(clip.x - start.x) > 0.01 || Math.abs(clip.y - start.y) > 0.01;
+      const nx = Math.round(x * 100) / 100;
+      const ny = Math.round(y * 100) / 100;
+      writeProp(clip, 'x', nx, state.playhead);
+      writeProp(clip, 'y', ny, state.playhead);
+      drag.moved = drag.moved || Math.abs(nx - start.x) > 0.01 || Math.abs(ny - start.y) > 0.01;
     } else if (drag.mode === 'scale') {
       const distance = Math.max(6, Math.hypot(point.x - box.cx, point.y - box.cy));
       const next = Math.max(0.08, Math.min(8, start.scale * (distance / start.distance)));
-      clip.scale = Math.round(next * 1000) / 1000;
-      drag.moved = drag.moved || Math.abs(clip.scale - start.scale) > 0.001;
+      if (start.uniform) {
+        const value = Math.round(next * 1000) / 1000;
+        writeProp(clip, 'scale', value, state.playhead);
+        drag.moved = drag.moved || Math.abs(value - start.scale) > 0.001;
+      } else {
+        const factor = next / start.scale;
+        const valueX = Math.round(start.scaleX * factor * 1000) / 1000;
+        const valueY = Math.round(start.scaleY * factor * 1000) / 1000;
+        writeProp(clip, 'scaleX', valueX, state.playhead);
+        writeProp(clip, 'scaleY', valueY, state.playhead);
+        drag.moved = drag.moved || Math.abs(valueX - start.scaleX) > 0.001 || Math.abs(valueY - start.scaleY) > 0.001;
+      }
     } else if (drag.mode === 'rotate') {
       const angle = Math.atan2(point.y - box.cy, point.x - box.cx);
       let delta = ((angle - start.angle) * 180) / Math.PI;
@@ -248,8 +274,9 @@ export function mountPreview(host) {
       if (delta < -180) delta += 360;
       let next = start.rotate + delta;
       if (event.shiftKey) next = Math.round(next / 15) * 15;
-      clip.rotate = Math.round(next * 10) / 10;
-      drag.moved = drag.moved || Math.abs(clip.rotate - start.rotate) > 0.01;
+      const value = Math.round(next * 10) / 10;
+      writeProp(clip, 'rotate', value, state.playhead);
+      drag.moved = drag.moved || Math.abs(value - start.rotate) > 0.01;
     }
     schedulePaint();
     event.preventDefault();
@@ -265,12 +292,13 @@ export function mountPreview(host) {
     const { clip, moved, start } = drag;
     drag = null;
     if (!moved) return;
-    const patch = { x: clip.x, y: clip.y, scale: clip.scale, rotate: clip.rotate };
+    const nextKeyframes = clip.keyframes;
+    const patch = { x: clip.x, y: clip.y, scale: clip.scale, rotate: clip.rotate, keyframes: nextKeyframes };
+    if (clip.scaleX !== undefined) patch.scaleX = clip.scaleX;
+    if (clip.scaleY !== undefined) patch.scaleY = clip.scaleY;
     // Se restaura el estado inicial para que el historial guarde el cambio como un solo paso.
-    clip.x = start.x;
-    clip.y = start.y;
-    clip.scale = start.scale;
-    clip.rotate = start.rotate;
+    Object.assign(clip, start.base);
+    clip.keyframes = start.keyframes;
     updateClip(clip.id, patch, { history: true });
   }
 

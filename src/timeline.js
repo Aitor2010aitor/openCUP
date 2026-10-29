@@ -155,6 +155,11 @@ export function mountTimeline(host) {
     const thumb = media?.thumb;
     const thumbStyle = thumb ? ` style="background-image:url('${thumb}')"` : '';
     const wave = clip.kind === 'audio' ? '<canvas class="clip-wave"></canvas>' : '';
+    // Rombos de fotograma clave (unión de instantes de todas las propiedades animadas).
+    const kfTimes = [...new Set(
+      Object.values(clip.keyframes || {}).flatMap((list) => (Array.isArray(list) ? list.map((point) => point.t) : [])),
+    )].sort((a, b) => a - b);
+    const diamonds = kfTimes.map((time) => `<i class="kf-diamond" style="left:${(time - clip.start) * px}px" title="Fotograma clave ${formatTime(time)}"></i>`).join('');
     const textPreview = clip.kind === 'text'
       ? `<div class="clip-text-preview">${escapeHtml(clip.text?.content || '')}</div>`
       : clip.kind === 'sticker'
@@ -164,6 +169,7 @@ export function mountTimeline(host) {
       <div class="clip ${clip.kind}${selected ? ' selected' : ''}" data-clip-id="${clip.id}" style="left:${clip.start * px}px;width:${width}px">
         ${thumb ? `<div class="clip-thumb"${thumbStyle}></div>` : ''}
         <div class="clip-shade"></div>
+        ${diamonds}
         ${wave}
         ${textPreview}
         ${clip.kind !== 'text' && clip.kind !== 'sticker' ? `<div class="clip-label">${escapeHtml(clip.name || 'Clip')}</div>` : ''}

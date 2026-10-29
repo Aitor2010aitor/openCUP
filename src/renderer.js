@@ -1,6 +1,7 @@
 import { FILTERS } from './store.js';
 import { EFFECTS } from './library.js';
 import { textAnimationById } from './text-catalog.js';
+import { transformAt, keyframeValue } from './keyframes.js';
 
 const clamp01 = (value) => Math.max(0, Math.min(1, value));
 
@@ -36,7 +37,7 @@ export function activeLayers(project, time) {
 }
 
 export function clipAlpha(clip, local) {
-  let alpha = clip.opacity ?? 1;
+  let alpha = keyframeValue(clip, 'opacity', (clip.start || 0) + local, clip.opacity ?? 1);
   const fadeIn = clip.fadeIn || 0;
   const hasTransition = clip.transition && clip.transition !== 'none';
   if (fadeIn > 0 && local < fadeIn && !hasTransition) alpha *= clamp01(local / fadeIn);
@@ -160,8 +161,9 @@ export function textLayout(text, width, height, ctx = measureCtx) {
 
 /* Devuelve la caja de una capa de texto/sticker en píxeles del canvas.
    Se usa tanto para dibujar los tiradores del preview como para el hit-testing. */
-export function clipLayerBox(clip, width, height) {
+export function clipLayerBox(clip, width, height, time = null) {
   if (!clip) return null;
+  const tr = transformAt(clip, time === null ? (clip.start || 0) : time);
   if (clip.kind === 'text') {
     const text = clip.text || {};
     const metrics = textLayout(text, width, height);
@@ -174,10 +176,12 @@ export function clipLayerBox(clip, width, height) {
       width: metrics.blockWidth + pad * 2 + outline * 2 + metrics.fontSize * 0.1,
       height: metrics.blockHeight + pad * 2 + outline * 2 +
         textCurveExtra(text, metrics.fontSize) + metrics.fontSize * 0.08,
-      cx: width / 2 + (((clip.x || 0) + (text.x || 0)) / 100) * width,
-      cy: height / 2 + (((clip.y || 0) + (text.y || 0)) / 100) * height,
-      rotation: clip.rotate || 0,
-      scale: clip.scale ?? 1,
+      cx: width / 2 + ((tr.x + (text.x || 0)) / 100) * width,
+      cy: height / 2 + ((tr.y + (text.y || 0)) / 100) * height,
+      rotation: tr.rotate,
+      scale: tr.scaleX,
+      scaleX: tr.scaleX,
+      scaleY: tr.scaleY,
       kind: 'text',
     };
   }
@@ -189,10 +193,12 @@ export function clipLayerBox(clip, width, height) {
     return {
       width: size,
       height: size,
-      cx: width / 2 + (((clip.x || 0) + (sticker.x || 0)) / 100) * width,
-      cy: height / 2 + (((clip.y || 0) + (sticker.y || 0)) / 100) * height,
-      rotation: (clip.rotate || 0) + (sticker.rotate || 0),
-      scale: clip.scale ?? 1,
+      cx: width / 2 + ((tr.x + (sticker.x || 0)) / 100) * width,
+      cy: height / 2 + ((tr.y + (sticker.y || 0)) / 100) * height,
+      rotation: tr.rotate + (sticker.rotate || 0),
+      scale: tr.scaleX,
+      scaleX: tr.scaleX,
+      scaleY: tr.scaleY,
       kind: 'sticker',
     };
   }
@@ -1499,8 +1505,10 @@ function drawMediaLayer(ctx, layer, width, height, pool, options = {}) {
   const { clip, local } = layer;
   const media = clip.mediaId ? pool.mediaFor(clip.mediaId) : null;
   if (!media) return;
+  const time = (clip.start || 0) + local;
+  const tr = transformAt(clip, time);
   const anim = options.ignoreTransition ? null : transitionState(clip, local);
-  const alpha = (options.ignoreFades ? (clip.opacity ?? 1) : clipAlpha(clip, local)) * transitionAlpha(anim);
+  const alpha = (options.ignoreFades ? tr.opacity : clipAlpha(clip, local)) * transitionAlpha(anim);
   if (alpha <= 0.002) return;
   const filter = clipFilter(clip);
   const spec = effectSpec(clip);
@@ -1509,13 +1517,12 @@ function drawMediaLayer(ctx, layer, width, height, pool, options = {}) {
   ctx.globalAlpha = alpha;
   if (filter !== 'none') ctx.filter = filter;
   if (anim?.type === 'blur') ctx.filter = `${filter === 'none' ? '' : `${filter} `}blur(${(1 - anim.p) * 10}px)`;
-  ctx.translate(width / 2 + ((clip.x || 0) / 100) * width, height / 2 + ((clip.y || 0) / 100) * height);
-  if (clip.rotate) ctx.rotate((clip.rotate * Math.PI) / 180);
+  ctx.translate(width / 2 + (tr.x / 100) * width, height / 2 + (tr.y / 100) * height);
+  if (tr.rotate) ctx.rotate((tr.rotate * Math.PI) / 180);
   applyEntrance(ctx, anim, width, height);
-  const scale = clip.scale ?? 1;
   ctx.translate(motion.tx, motion.ty);
   if (motion.rot) ctx.rotate(motion.rot);
-  ctx.scale(scale * motion.scale * motion.sx, scale * motion.scale * motion.sy);
+  ctx.scale(tr.scaleX * motion.scale * motion.sx, tr.scaleY * motion.scale * motion.sy);
   wipeClip(ctx, anim, width, height);
   if (spec?.mirror) {
     ctx.save();
@@ -1555,20 +1562,27 @@ function drawMediaLayer(ctx, layer, width, height, pool, options = {}) {
 function drawStickerLayer(ctx, layer, width, height, options = {}) {
   const { clip, local } = layer;
   const sticker = clip.sticker || {};
+  const time = (clip.start || 0) + local;
+  const tr = transformAt(clip, time);
   const anim = options.ignoreTransition ? null : transitionState(clip, local);
-  const alpha = (options.ignoreFades ? (clip.opacity ?? 1) : clipAlpha(clip, local)) * transitionAlpha(anim);
+  const alpha = (options.ignoreFades ? tr.opacity : clipAlpha(clip, local)) * transitionAlpha(anim);
   if (alpha <= 0.002) return;
   const fontSize = Math.max(8, (sticker.size ?? 220) * (height / 1080));
-  const offsetX = ((clip.x || 0) + (sticker.x || 0)) / 100 * width;
-  const offsetY = ((clip.y || 0) + (sticker.y || 0)) / 100 * height;
+  const offsetX = (tr.x + (sticker.x || 0)) / 100 * width;
+  const offsetY = (tr.y + (sticker.y || 0)) / 100 * height;
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(width / 2 + offsetX, height / 2 + offsetY);
-  ctx.rotate((((clip.rotate || 0) + (sticker.rotate || 0)) * Math.PI) / 180);
+  ctx.rotate(((tr.rotate + (sticker.rotate || 0)) * Math.PI) / 180);
   applyEntrance(ctx, anim, width, height);
-  let scale = clip.scale ?? 1;
-  if (clip.effect === 'zoomPulse') scale *= 1 + Math.sin(local * 6.2) * 0.055;
-  ctx.scale(scale, scale);
+  let sx = tr.scaleX;
+  let sy = tr.scaleY;
+  if (clip.effect === 'zoomPulse') {
+    const pulse = 1 + Math.sin(local * 6.2) * 0.055;
+    sx *= pulse;
+    sy *= pulse;
+  }
+  ctx.scale(sx, sy);
   wipeClip(ctx, anim, width, height);
   const content = String(sticker.content || '✨');
   const family = '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif';
@@ -1816,18 +1830,20 @@ function clearShadow(ctx) {
 function drawTextLayer(ctx, layer, width, height, options = {}) {
   const { clip, local } = layer;
   const text = clip.text || {};
+  const time = (clip.start || 0) + local;
+  const tr = transformAt(clip, time);
   const anim = options.ignoreTransition ? null : transitionState(clip, local);
   const textAnim = textAnimationState(text, local, clip.duration || 1);
-  const alpha = (options.ignoreFades ? (clip.opacity ?? 1) : clipAlpha(clip, local)) *
+  const alpha = (options.ignoreFades ? tr.opacity : clipAlpha(clip, local)) *
     transitionAlpha(anim) *
-    textNumber(text.opacity, 1) *
+    keyframeValue(clip, 'text.opacity', time, textNumber(text.opacity, 1)) *
     (textAnim?.alpha ?? 1);
   if (alpha <= 0.002) return;
   const metrics = textLayout(text, width, height);
   if (!metrics.lines.length) return;
   const { fontSize, lineHeight, blockHeight, blockWidth } = metrics;
-  const offsetX = ((clip.x || 0) + (text.x || 0)) / 100 * width;
-  const offsetY = ((clip.y || 0) + (text.y || 0)) / 100 * height;
+  const offsetX = (tr.x + (text.x || 0)) / 100 * width;
+  const offsetY = (tr.y + (text.y || 0)) / 100 * height;
   const centerX = width / 2 + offsetX;
   const centerY = height / 2 + offsetY;
   const revealInfo = {
@@ -1838,13 +1854,12 @@ function drawTextLayer(ctx, layer, width, height, options = {}) {
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(centerX, centerY);
-  if (clip.rotate) ctx.rotate((clip.rotate * Math.PI) / 180);
+  if (tr.rotate) ctx.rotate((tr.rotate * Math.PI) / 180);
   applyEntrance(ctx, anim, width, height);
-  const baseScale = clip.scale ?? 1;
   const animScale = textAnim?.scale ?? 1;
   ctx.scale(
-    baseScale * (text.flipX ? -1 : 1) * animScale,
-    baseScale * (text.flipY ? -1 : 1) * animScale,
+    tr.scaleX * (text.flipX ? -1 : 1) * animScale,
+    tr.scaleY * (text.flipY ? -1 : 1) * animScale,
   );
   if (textAnim) {
     ctx.translate((textAnim.dx || 0) * fontSize, (textAnim.dy || 0) * fontSize);

@@ -797,6 +797,12 @@ input[type="checkbox"] { accent-color: var(--accent-2); }
 .clip-handle.left { left: 0; }
 .clip-handle.right { right: 0; }
 .clip-wave { position: absolute; inset: 8px 4px 4px; width: calc(100% - 8px); height: calc(100% - 12px); opacity: 0.55; pointer-events: none; }
+/* Rombos de fotograma clave sobre el clip (parte inferior, como en CapCut). */
+.kf-diamond {
+  position: absolute; bottom: 3px; width: 7px; height: 7px; margin-left: -3.5px;
+  background: #ffd166; transform: rotate(45deg); border-radius: 1px;
+  z-index: 3; pointer-events: none; box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
+}
 .clip-text-preview { position: absolute; inset: 0; display: flex; align-items: center; padding: 0 8px; font-size: 9.5px; color: rgba(255, 255, 255, 0.85); pointer-events: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .playhead { position: absolute; top: 0; bottom: 0; width: 1px; margin-left: -0.5px; background: #e8e8e8; z-index: 10; pointer-events: none; }
 .playhead-head { position: absolute; top: 0; left: -4px; width: 9px; height: 11px; background: #e8e8e8; clip-path: polygon(0 0, 100% 0, 50% 100%); }
@@ -1276,3 +1282,81 @@ button.ai-card:hover { background: #122326; border-color: #243638; }
   .home-brand { position: fixed; z-index: 20; }
   .home-toolbar { padding-top: 4px; }
 }
+
+/* --------------------- Controles de transformación (estilo CapCut) --------- */
+.dt-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.dt-row.stacked { flex-direction: column; align-items: stretch; gap: 5px; }
+.dt-lbl {
+  flex: 0 0 96px; font-size: 10.5px; color: #9a9a9a;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dt-row.stacked .dt-lbl { flex: 0 0 auto; }
+.dt-ctl { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.dt-ctl.end { flex: 0 0 auto; margin-left: auto; }
+.dt-line { display: flex; align-items: center; gap: 7px; width: 100%; }
+.dt-range { flex: 1 1 auto; min-width: 0; height: 3px; }
+.dt-inline { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+
+/* Cajón numérico ‹valor› con prefijo/unidad (X, Y, %, °). */
+.spin {
+  display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 6px;
+  background: #303030; border: 1px solid #414141; border-radius: 4px; flex: 0 0 auto;
+}
+.spin:focus-within { border-color: var(--accent-2); }
+.spin input[type="number"] {
+  width: 52px; min-width: 0; border: 0; background: transparent; outline: none;
+  color: #e0e0e0; font-size: 10.5px; font-variant-numeric: tabular-nums; text-align: right;
+  -moz-appearance: textfield;
+}
+.spin input[type="number"]::-webkit-outer-spin-button,
+.spin input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.spin-prefix, .spin-unit { font-size: 9.5px; color: #8a8a8a; flex: 0 0 auto; }
+.spin.spin-val { flex: 1 1 auto; min-width: 0; }
+.spin.spin-val input[type="number"] { flex: 1 1 auto; width: auto; }
+
+/* Control de fotograma clave ‹ ◇ ›. */
+.kf-ctl { display: inline-flex; align-items: center; gap: 1px; flex: 0 0 auto; }
+.kf-btn {
+  width: 20px; height: 22px; border: 0; background: transparent; color: #8a8a8a;
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 3px; padding: 0;
+}
+.kf-btn:hover { background: #3a3a3a; color: #e0e0e0; }
+.kf-btn:disabled { opacity: 0.3; cursor: default; }
+.kf-btn:disabled:hover { background: transparent; color: #8a8a8a; }
+.kf-btn.kf-add i {
+  width: 8px; height: 8px; border: 1.5px solid #8a8a8a; background: transparent;
+  transform: rotate(45deg); transition: background 0.15s, border-color 0.15s;
+}
+.kf-btn.kf-add:hover i { border-color: #e0e0e0; }
+.kf-btn.kf-add.on i { background: var(--accent-2); border-color: var(--accent-2); }
+.kf-ctl.has .kf-btn { color: #b5b5b5; }
+
+/* Dial circular de rotación. */
+.dial-btn {
+  width: 26px; height: 26px; border-radius: 50%; border: 1px solid #4a4a4a;
+  background: #303030; position: relative; flex: 0 0 auto; padding: 0;
+}
+.dial-btn i {
+  position: absolute; left: 50%; top: 50%; width: 1.5px; height: 9px;
+  background: var(--accent-2); transform-origin: 50% 100%;
+  transform: translate(-50%, -100%) rotate(var(--dial, 0deg));
+}
+.dial-btn:hover { border-color: #666; }
+
+/* Barra de alineación de 6 botones (3+3). */
+.align-bar { display: flex; gap: 2px; margin: 6px 0 8px; }
+.align-btn {
+  flex: 1 1 0; height: 26px; border: 1px solid #414141; border-radius: 4px;
+  background: #303030; color: #b8b8b8;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.align-btn:hover { border-color: #666; color: #fff; }
+
+/* Restablecer sección dentro del <summary> (solo icono, no cierra la sección). */
+.tx-group > summary { position: relative; }
+.sec-reset {
+  width: 22px; height: 22px; border: 0; background: transparent; color: #8a8a8a;
+  display: inline-flex; align-items: center; justify-content: center; border-radius: 4px;
+  flex: 0 0 auto; padding: 0; margin-left: 4px;
+}
+.sec-reset:hover { background: #3a3a3a; color: #fff; }

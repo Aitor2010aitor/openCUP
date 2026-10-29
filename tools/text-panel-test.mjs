@@ -64,10 +64,15 @@ const click = (selector) => page.evaluate((value) => {
 }, selector);
 
 const setRange = (key, value) => page.evaluate(({ key: field, value: next }) => {
-  const input = document.querySelector(`[data-text-range="${field}"]`);
+  // Los controles de transformación/mezcla nuevos son sliders [data-prop]
+  // o cajones numéricos [data-spin]; el resto siguen en [data-text-range].
+  const input = document.querySelector(`[data-text-range="${field}"]`)
+    || document.querySelector(`[data-prop="${field}"]`)
+    || document.querySelector(`[data-prop="text.${field}"]`)
+    || document.querySelector(`[data-spin="${field}"]`);
   if (!input) throw new Error(`No está el control ${field}`);
   input.value = String(next);
-  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event(input.matches('[data-spin]') ? 'change' : 'input', { bubbles: true }));
 }, { key, value });
 
 const setColor = (key, value) => page.evaluate(({ key: field, value: next }) => {
