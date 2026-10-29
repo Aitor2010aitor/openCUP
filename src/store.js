@@ -126,6 +126,7 @@ export const state = {
   history: [],
   future: [],
   pendingFiles: 0,
+  importProgress: null, // { current, total, fileName, startedAt, done }
 };
 
 const subscribers = new Map();
@@ -487,8 +488,12 @@ export async function importFiles(fileList, { addToTimeline = true, silent = fal
   const before = snapshot();
   const imported = [];
   state.pendingFiles += files.length;
+  state.importProgress = { current: 0, total: files.length, fileName: '', startedAt: Date.now() };
   emit('importing');
-  for (const file of files) {
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    state.importProgress = { ...state.importProgress, current: i, fileName: file.name };
+    emit('importing');
     try {
       if (!silent) toast(`Procesando ${file.name}…`, 'info', 1600);
       const meta = await analyzeFile(file);
@@ -501,9 +506,12 @@ export async function importFiles(fileList, { addToTimeline = true, silent = fal
       toast(`${file.name}: ${error.message || 'error al importar'}`, 'error', 4200);
     } finally {
       state.pendingFiles -= 1;
+      state.importProgress = { ...state.importProgress, current: i + 1, fileName: file.name };
       emit('importing');
     }
   }
+  state.importProgress = null;
+  emit('importing');
   if (imported.length) {
     pushHistory(before);
     if (!state.project.thumb && imported[0]?.thumb) state.project.thumb = imported[0].thumb;

@@ -547,6 +547,25 @@ export function mountLeftPanel(host) {
 
   function mediaPanel(media) {
     const filtered = media.filter((item) => mediaFilter === 'all' || item.kind === mediaFilter);
+    const ip = state.importProgress;
+    const progressHtml = ip ? (() => {
+      const pct = ip.total ? Math.round((ip.current / ip.total) * 100) : 0;
+      const elapsed = Date.now() - (ip.startedAt || Date.now());
+      const perFile = ip.current > 0 ? elapsed / ip.current : 0;
+      const remaining = Math.max(0, (ip.total - ip.current) * perFile);
+      const eta = remaining > 0 ? `~${Math.ceil(remaining / 1000)}s restantes` : 'Finalizando…';
+      return `
+        <div class="import-progress" style="margin:8px 0;padding:10px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px">
+          <div style="font-size:12px;font-weight:700;margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(ip.fileName || 'Procesando…')}</div>
+          <div style="height:6px;background:var(--bg-3);border-radius:3px;overflow:hidden">
+            <div style="height:100%;width:${pct}%;background:var(--accent,#1fa7b5);transition:width .2s"></div>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px;display:flex;justify-content:space-between">
+            <span>${ip.current}/${ip.total}</span>
+            <span>${eta}</span>
+          </div>
+        </div>`;
+    })() : '';
     const top = `
       <div class="media-search-row">
         <label class="search-box">${icon('search', 13)}<input data-media-search placeholder="Buscar medios" value="${escapeHtml(searchQuery)}" /></label>
@@ -554,6 +573,7 @@ export function mountLeftPanel(host) {
       </div>`;
     if (!state.media.size) {
       return `
+        ${progressHtml}
         <div class="media-drop" data-import>
           <div class="import-cta"><span class="import-round">${icon('plus', 15)}</span><span>Importar</span></div>
           <p>Arrastra y suelta los videos, las fotos y los archivos de audio aquí</p>
@@ -568,6 +588,7 @@ export function mountLeftPanel(host) {
     }
     return `
       ${top}
+      ${progressHtml}
       ${filtered.length
         ? `<div class="media-grid">${filtered.map(mediaCard).join('')}</div>`
         : panelEmpty('No hay archivos de este tipo', 'Cambia el filtro o importa un archivo nuevo.', 'film')}
@@ -1707,13 +1728,24 @@ export function mountLeftPanel(host) {
   }));
   subscriptions.push(on('project', render));
   subscriptions.push(on('selection', render));
-  subscriptions.push(on('importing', render));
+  let importTimer = null;
+  function startImportTimer() {
+    if (importTimer) return;
+    importTimer = setInterval(() => { if (state.importProgress) render(); else stopImportTimer(); }, 500);
+  }
+  function stopImportTimer() { if (importTimer) { clearInterval(importTimer); importTimer = null; } }
+
+  subscriptions.push(on('importing', () => {
+    if (state.importProgress) startImportTimer(); else stopImportTimer();
+    render();
+  }));
 
   render();
 
   return {
     element: host,
     destroy() {
+      stopImportTimer();
       subscriptions.forEach((off) => off());
       speech?.removeEventListener?.('voiceschanged', onVoicesChanged);
       speech?.cancel();
