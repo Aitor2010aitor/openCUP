@@ -32,7 +32,8 @@ $suites = @(
   @{ name = 'visual';          cmd = 'node tools/visual-test.mjs' },
   @{ name = 'preview-drag';    cmd = 'node tools/preview-drag-test.mjs' },
   @{ name = 'effects-visual';  cmd = 'node tools/effects-visual-test.mjs' },
-  @{ name = 'text-panel';      cmd = 'node tools/text-panel-test.mjs' }
+  @{ name = 'text-panel';      cmd = 'node tools/text-panel-test.mjs' },
+  @{ name = 'project-features'; cmd = 'node tools/project-features-test.mjs' }
 )
 
 $ok = 0; $ko = 0; $resumen = @()

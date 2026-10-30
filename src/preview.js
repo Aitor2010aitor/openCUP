@@ -77,6 +77,9 @@ export function mountPreview(host) {
   const subscriptions = [];
   let muted = false;
   let drawRequest = 0;
+  let animRequest = 0;
+  let animClockStart = 0;
+  let animClockValue = 0;
   let destroyed = false;
   let lastCanvasWidth = 0;
   let lastCanvasHeight = 0;
@@ -372,7 +375,9 @@ export function mountPreview(host) {
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     pool.syncPlayback(state.project, state.playhead, state.playing, muted);
-    renderFrame(ctx, rect.width, rect.height, state.project, pool, state.playhead);
+    renderFrame(ctx, rect.width, rect.height, state.project, pool, state.playhead, {
+      animClock: state.playing ? 0 : animClockValue,
+    });
     updateOverlay();
   }
 
@@ -382,6 +387,37 @@ export function mountPreview(host) {
       drawRequest = 0;
       paint();
     });
+  }
+
+  /* Las animaciones de texto en bucle se previsualizan aunque esté pausado. */
+  function hasLiveTextAnimation() {
+    if (!state.project) return false;
+    const time = state.playhead;
+    for (const track of state.project.tracks) {
+      if (track.hidden || track.locked) continue;
+      for (const clip of track.clips) {
+        if (clip.kind !== 'text') continue;
+        const anim = clip.text?.animation;
+        if (!anim || anim === 'none') continue;
+        if (time >= clip.start && time < clip.start + clip.duration) return true;
+      }
+    }
+    return false;
+  }
+
+  function animationLoop() {
+    animRequest = 0;
+    if (destroyed || state.playing || !hasLiveTextAnimation()) return;
+    animClockValue = animClockStart ? (performance.now() - animClockStart) / 1000 : 0;
+    paint();
+    animRequest = requestAnimationFrame(animationLoop);
+  }
+
+  function scheduleAnimationPreview() {
+    animClockStart = performance.now();
+    animClockValue = 0;
+    if (animRequest || destroyed || state.playing) return;
+    animRequest = requestAnimationFrame(animationLoop);
   }
 
   function updateTransport() {
@@ -404,13 +440,18 @@ export function mountPreview(host) {
   subscriptions.push(on('tick', () => {
     refreshTimecode();
     schedulePaint();
+    scheduleAnimationPreview();
   }));
   subscriptions.push(on('project', () => {
     layout();
     refreshTimecode();
     updateTransport();
+    scheduleAnimationPreview();
   }));
-  subscriptions.push(on('playing', updateTransport));
+  subscriptions.push(on('playing', () => {
+    updateTransport();
+    scheduleAnimationPreview();
+  }));
   subscriptions.push(on('selection', schedulePaint));
 
   importInput.addEventListener('change', async () => {
@@ -479,6 +520,7 @@ export function mountPreview(host) {
       destroyed = true;
       if (drag) endDrag();
       cancelAnimationFrame(drawRequest);
+      cancelAnimationFrame(animRequest);
       observer.disconnect();
       window.removeEventListener('resize', layout);
       document.removeEventListener('fullscreenchange', onFullscreen);

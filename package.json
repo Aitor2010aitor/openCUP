@@ -1,6 +1,6 @@
 {
   "name": "openCUP",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "Editor de video local inspirado en el flujo de trabajo de CapCut",
@@ -17,6 +17,8 @@
     "test:visual": "node tools/visual-test.mjs",
     "test:preview": "node tools/preview-drag-test.mjs",
     "test:effects": "node tools/effects-visual-test.mjs",
+    "test:project": "node tools/project-features-test.mjs",
+    "test:kokoro": "node tools/kokoro-tts-test.mjs",
     "test:subtitles": "node tools/subtitles-progress-test.mjs"
   },
   "devDependencies": {

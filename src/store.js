@@ -1,5 +1,5 @@
 import { db } from './db.js';
-import { clamp, uid, debounce, toast, formatTime } from './utils.js';
+import { clamp, uid, debounce, toast, formatTime, downloadBlob } from './utils.js';
 import { CAPCUT_FILTERS, CAPCUT_FILTER_CATEGORIES } from './filter-catalog.js';
 import { CAPTION_STYLES } from './library.js';
 
@@ -162,6 +162,23 @@ export function createProject(name = 'Proyecto sin título') {
   };
 }
 
+export function addTrack(type = 'video', { history = true } = {}) {
+  if (!state.project) return null;
+  const before = snapshot();
+  const count = state.project.tracks.filter((track) => track.type === type).length;
+  const labels = { video: 'Vídeo', text: 'Texto', audio: 'Audio', overlay: 'Superposición' };
+  const base = labels[type] || 'Capa';
+  let name = count === 0 ? base : `${base} ${count + 1}`;
+  while (state.project.tracks.some((track) => track.name === name)) name = `${name} ${count + 2}`;
+  const track = { id: uid('track'), type, name, clips: [] };
+  state.project.tracks.push(track);
+  if (history) pushHistory(before);
+  queueSave();
+  emit('project');
+  toast(`Pista “${track.name}” añadida`, 'success', 1800);
+  return track;
+}
+
 export function projectDuration() {
   if (!state.project) return 0;
   let end = 0;
@@ -318,6 +335,115 @@ export async function openProject(id) {
   state.view = 'editor';
   emit('view');
   emit('project');
+}
+
+const PROJECT_FILE_KIND = 'openCUP-project';
+const PROJECT_FILE_VERSION = 1;
+const PROJECT_FILE_EMBED_LIMIT = 256 * 1024 * 1024;
+
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error || new Error('No se pudo leer el medio'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function dataUrlToBlob(dataUrl, fallbackMime = '') {
+  const match = /^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(String(dataUrl));
+  if (!match) throw new Error('Medio corrupto dentro del archivo de proyecto');
+  const mime = match[1] || fallbackMime || 'application/octet-stream';
+  const payload = match[3];
+  if (!match[2]) return new Blob([decodeURIComponent(payload)], { type: mime });
+  const binary = atob(payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+/* Guarda el proyecto como archivo descargable (.opencup.json),
+   incluyendo los medios incrustados cuando no superan el límite. */
+export async function exportProjectFile(sourceProject = null) {
+  const isCurrent = !sourceProject;
+  const project = sourceProject || state.project;
+  if (!project) throw new Error('No hay ningún proyecto abierto');
+  const metas = isCurrent ? mediaList() : (project.media || []);
+  const media = [];
+  let embeddedBytes = 0;
+  let skipped = 0;
+  for (const meta of metas) {
+    const entry = { ...meta };
+    const blob = isCurrent
+      ? state.media.get(meta.id)?.blob || null
+      : (await db.getMedia(meta.id))?.blob || null;
+    if (blob && blob.size && embeddedBytes + blob.size <= PROJECT_FILE_EMBED_LIMIT) {
+      entry.mime = blob.type || '';
+      entry.data = await blobToDataURL(blob);
+      embeddedBytes += blob.size;
+    } else if (blob) {
+      skipped += 1;
+    }
+    media.push(entry);
+  }
+  const cleanProject = JSON.parse(JSON.stringify(project));
+  delete cleanProject.media;
+  const payload = {
+    kind: PROJECT_FILE_KIND,
+    fileVersion: PROJECT_FILE_VERSION,
+    app: 'openCUP',
+    exportedAt: Date.now(),
+    project: cleanProject,
+    media,
+  };
+  const base = String(project.name || 'proyecto')
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60) || 'proyecto';
+  downloadBlob(new Blob([JSON.stringify(payload)], { type: 'application/json' }), `${base}.opencup.json`);
+  return { media: media.length, embedded: media.length - skipped, skipped, bytes: embeddedBytes };
+}
+
+/* Abre un proyecto guardado como archivo y lo añade a la biblioteca local. */
+export async function importProjectFile(file) {
+  if (!file) throw new Error('No se recibió ningún archivo');
+  let payload = null;
+  try {
+    payload = JSON.parse(await file.text());
+  } catch {
+    payload = null;
+  }
+  if (!payload || payload.kind !== PROJECT_FILE_KIND || !payload.project?.tracks) {
+    throw new Error('El archivo no es un proyecto válido de openCUP');
+  }
+  queueSave.cancel();
+  const project = payload.project;
+  const metas = [];
+  let missing = 0;
+  for (const entry of payload.media || []) {
+    const { data, mime, ...meta } = entry;
+    if (!meta?.id) continue;
+    metas.push(meta);
+    if (!data) {
+      missing += 1;
+      continue;
+    }
+    try {
+      await db.saveMedia({ id: meta.id, blob: dataUrlToBlob(data, mime), meta });
+    } catch (error) {
+      console.warn('Medio ilegible en el archivo', error);
+      missing += 1;
+    }
+  }
+  const record = { ...project, media: metas, updatedAt: Date.now() };
+  await db.saveProject(JSON.parse(JSON.stringify(record)));
+  await refreshProjects();
+  await openProject(record.id);
+  if (missing) {
+    toast(`${missing} medio(s) venían sin archivo y se omitieron`, 'warning', 4200);
+  }
+  return { id: record.id, name: record.name, media: metas.length, missing };
 }
 
 export function goHome() {

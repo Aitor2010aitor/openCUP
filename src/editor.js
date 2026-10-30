@@ -7,6 +7,8 @@ import {
   saveNow,
   goHome,
   importFiles,
+  exportProjectFile,
+  importProjectFile,
 } from './store.js';
 import { icon, logo } from './icons.js';
 import { mountLeftPanel } from './panels.js';
@@ -79,12 +81,14 @@ export function mountEditor(root) {
       </div>
       <section data-timeline></section>
       <input type="file" class="hidden" multiple data-import-input accept="video/*,image/*,audio/*,.mkv,.mov,.m4v,.webm,.mp3,.wav,.m4a,.aac,.ogg" />
+      <input type="file" class="hidden" data-project-input accept=".json,.opencup,application/json" />
     </div>`;
 
   const tabs = root.querySelector('[data-tabs]');
   const projectName = root.querySelector('[data-project-name]');
   const saveState = root.querySelector('[data-save-state]');
   const importInput = root.querySelector('[data-import-input]');
+  const projectInput = root.querySelector('[data-project-input]');
   const editRoot = root.querySelector('.editor');
   const leftHost = root.querySelector('[data-left]');
   const detailsHost = root.querySelector('[data-details]');
@@ -166,6 +170,18 @@ export function mountEditor(root) {
       await saveNow();
       toast('Proyecto guardado', 'success');
     } else if (action === 'import') importInput.click();
+    else if (action === 'saveFile') {
+      try {
+        await saveNow();
+        const result = await exportProjectFile();
+        const note = result.skipped
+          ? ` · ${result.skipped} medio(s) grandes quedan solo en este navegador`
+          : '';
+        toast(`Proyecto guardado como archivo${note}`, 'success', 4200);
+      } catch (error) {
+        toast(error?.message || 'No se pudo guardar el proyecto', 'error');
+      }
+    } else if (action === 'openFile') projectInput.click();
     else if (action === 'capcut') openCapCutImportDialog();
     else if (action === 'aibridge') void openAiBridgeDialog();
     else if (action === 'export') openExportDialog();
@@ -183,6 +199,8 @@ export function mountEditor(root) {
       { header: true, label: 'Proyecto' },
       { id: 'new', label: 'Nuevo proyecto', icon: 'plus' },
       { id: 'save', label: 'Guardar ahora', icon: 'save' },
+      { id: 'saveFile', label: 'Guardar proyecto como archivo', icon: 'download' },
+      { id: 'openFile', label: 'Abrir proyecto desde archivo', icon: 'folderOpen' },
       { id: 'import', label: 'Importar medios', icon: 'import' },
       { id: 'capcut', label: 'Abrir proyecto de CapCut', icon: 'folderOpen' },
       { id: 'aibridge', label: 'Puente IA · puerto local', icon: 'link' },
@@ -332,6 +350,19 @@ export function mountEditor(root) {
   importInput.addEventListener('change', async () => {
     if (importInput.files?.length) await importFiles(importInput.files);
     importInput.value = '';
+  });
+
+  projectInput.addEventListener('change', async () => {
+    const file = projectInput.files?.[0];
+    projectInput.value = '';
+    if (!file) return;
+    try {
+      await saveNow();
+      const result = await importProjectFile(file);
+      toast(`Proyecto “${result.name}” abierto desde el archivo`, 'success', 3600);
+    } catch (error) {
+      toast(error?.message || 'No se pudo abrir el archivo de proyecto', 'error', 4200);
+    }
   });
 
   subscriptions.push(on('panel', updateTabs));

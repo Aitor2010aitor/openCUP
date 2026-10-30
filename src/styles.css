@@ -443,6 +443,18 @@ input[type="checkbox"] { accent-color: var(--accent-2); }
 .text-tts-form .field label b { color: #cfcfcf; font-weight: 500; font-variant-numeric: tabular-nums; }
 .text-tts-actions { display: flex; gap: 8px; margin-bottom: 8px; }
 .text-tts-actions .btn { flex: 1; }
+.text-kokoro-form { padding: 4px 12px 14px; margin-top: 6px; border-top: 1px solid #262626; }
+.text-kokoro-form .btn-block { margin-top: 4px; }
+.tts-progress { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 6px; }
+.tts-progress.hidden { display: none; }
+.tts-progress-track { height: 5px; border-radius: 999px; background: #1f1f1f; overflow: hidden; }
+.tts-progress-bar { height: 100%; width: 0; border-radius: 999px; background: linear-gradient(90deg, var(--accent), #7ce7ff); transition: width .2s ease; }
+.tts-progress.indeterminate .tts-progress-bar { width: 45%; animation: kokoro-indeterminate 1.15s ease-in-out infinite alternate; }
+.tts-progress-label { font-size: 10px; color: #9b9b9b; }
+@keyframes kokoro-indeterminate {
+  from { transform: translateX(-60%); }
+  to { transform: translateX(240%); }
+}
 
 @keyframes tx-fade { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
 @keyframes tx-slide-up { 0%, 100% { opacity: 0.15; transform: translateY(9px); } 55% { opacity: 1; transform: translateY(0); } }
@@ -756,6 +768,11 @@ input[type="checkbox"] { accent-color: var(--accent-2); }
 .track-label .t-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .track-label .t-actions { display: flex; gap: 1px; opacity: 0.55; }
 .track-label:hover .t-actions { opacity: 1; }
+.track-add-row { height: 38px; display: flex; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid #232323; }
+.track-add-row .t-add-icon { width: 20px; height: 20px; border-radius: 3px; background: #303030; color: var(--accent); display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.t-add-type { width: 22px; height: 22px; border: 1px solid #333; border-radius: 4px; background: #232323; color: #a9a9a9; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.t-add-type:hover { border-color: var(--accent); color: var(--accent); background: #1f2a2b; }
+.tl-empty .track-add-row { visibility: hidden; }
 .timeline-scroll { flex: 1 1 auto; overflow: auto; position: relative; background: var(--panel); }
 .timeline-content { position: relative; min-width: 100%; height: 100%; }
 .ruler { height: 26px; position: sticky; top: 0; z-index: 7; background: var(--panel); border-bottom: 1px solid #1d1d1d; cursor: pointer; user-select: none; }

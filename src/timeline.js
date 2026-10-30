@@ -8,6 +8,7 @@ import {
   selectClip,
   addMediaToTimeline,
   addTextClip,
+  addTrack,
   moveClip,
   trimClip,
   splitAtPlayhead,
@@ -31,6 +32,7 @@ const TRACK_META = {
   text: { hint: 'Añade texto desde la pestaña Texto', icon: 'text' },
   video: { hint: 'Arrastra tus videos e imágenes aquí', icon: 'film' },
   audio: { hint: 'Arrastra música o audio aquí', icon: 'music' },
+  overlay: { hint: 'Capa extra: stickers, texto o efectos', icon: 'layers' },
 };
 
 const escapeSelector = (value) => String(value).replace(/["\\]/g, '\\$&');
@@ -197,7 +199,14 @@ export function mountTimeline(host) {
               <button class="icon-btn sm ${track.locked ? 'active' : ''}" data-track-toggle="locked" title="Bloquear pista">${icon('lock', 12)}</button>
             </span>
           </div>`;
-      }).join('')}`;
+      }).join('')}
+      <div class="track-add-row" title="Añadir pista/capa">
+        <span class="t-add-icon">${icon('plus', 13)}</span>
+        <button class="t-add-type" data-add-track-type="video" title="Añadir pista de vídeo">${icon('film', 12)}</button>
+        <button class="t-add-type" data-add-track-type="text" title="Añadir pista de texto">${icon('text', 12)}</button>
+        <button class="t-add-type" data-add-track-type="audio" title="Añadir pista de audio">${icon('music', 12)}</button>
+        <button class="t-add-type" data-add-track-type="overlay" title="Añadir pista de superposición">${icon('layers', 12)}</button>
+      </div>`;
   }
 
   function renderTracks(px) {
@@ -494,6 +503,11 @@ export function mountTimeline(host) {
   });
 
   labels.addEventListener('click', (event) => {
+    const addType = event.target.closest('[data-add-track-type]');
+    if (addType) {
+      addTrack(addType.dataset.addTrackType);
+      return;
+    }
     const button = event.target.closest('[data-track-toggle]');
     if (!button) return;
     const label = button.closest('.track-label');

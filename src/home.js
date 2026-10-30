@@ -10,6 +10,8 @@ import {
   addTextClip,
   setPanel,
   seek,
+  exportProjectFile,
+  importProjectFile,
 } from './store.js';
 import { icon, logo } from './icons.js';
 import { openModal, confirmDialog, promptDialog } from './modal.js';
@@ -100,6 +102,7 @@ function projectCard(project, index) {
       </div>
       <div class="card-actions">
         <button class="icon-btn" data-project-rename="${project.id}" title="Renombrar">${icon('pencil', 13)}</button>
+        <button class="icon-btn" data-project-export="${project.id}" title="Guardar proyecto como archivo">${icon('download', 13)}</button>
         <button class="icon-btn" data-project-delete="${project.id}" title="Eliminar">${icon('trash', 13)}</button>
       </div>
       <div class="project-info">
@@ -436,6 +439,7 @@ export function mountHome(root) {
             <div class="projects-toolbar">
               <input class="projects-search hidden" data-projects-search-input placeholder="Buscar proyectos" aria-label="Buscar proyectos" />
               <button class="capcut-pill" data-home-action="capcut" title="Importar un proyecto de CapCut">${icon('folderOpen', 14)} CapCut</button>
+              <button class="capcut-pill" data-home-action="openProjectFile" title="Abrir un proyecto guardado como archivo">${icon('download', 14)} Abrir archivo</button>
               <button class="icon-btn" data-projects-search title="Buscar">${icon('search', 15)}</button>
               <button class="icon-btn" data-home-action="projects" title="Ver todos los proyectos">${icon('grid', 15)}${icon('chevronDown', 9)}</button>
               <button class="icon-btn" data-projects-trash title="Papelera">${icon('trash', 15)}</button>
@@ -463,6 +467,12 @@ export function mountHome(root) {
   fileInput.multiple = true;
   fileInput.accept = 'video/*,image/*,audio/*,.mkv,.mov,.m4v,.webm,.mp3,.wav,.m4a,.aac,.ogg';
   home.append(fileInput);
+
+  const projectFileInput = document.createElement('input');
+  projectFileInput.type = 'file';
+  projectFileInput.className = 'hidden';
+  projectFileInput.accept = '.json,.opencup,application/json';
+  home.append(projectFileInput);
   let sortMode = 'recent';
   let searchQuery = '';
   let showcaseOffset = 0;
@@ -523,6 +533,22 @@ export function mountHome(root) {
     toast('Proyecto eliminado', 'success', 2000);
   }
 
+  async function handleExportFile(id) {
+    try {
+      const isCurrent = state.project?.id === id;
+      const source = isCurrent ? null : state.projects.find((item) => item.id === id);
+      if (!isCurrent && !source) return;
+      const result = await exportProjectFile(source);
+      const name = (isCurrent ? state.project?.name : source?.name) || 'Proyecto';
+      const note = result.skipped
+        ? ` · ${result.skipped} medio(s) grandes quedan solo en este navegador`
+        : ` · ${result.embedded} medio(s) incrustados`;
+      toast(`“${name}” guardado como archivo${note}`, 'success', 4200);
+    } catch (error) {
+      toast(error?.message || 'No se pudo guardar el proyecto', 'error', 3800);
+    }
+  }
+
   function focusEditPilot() {
     main.scrollTo({ top: 0, behavior: 'smooth' });
     setTimeout(() => aiInput.focus(), 260);
@@ -564,6 +590,7 @@ export function mountHome(root) {
     else if (action === 'templates') openTemplatesModal();
     else if (action === 'new') openNewProjectDialog();
     else if (action === 'import') fileInput.click();
+    else if (action === 'openProjectFile') projectFileInput.click();
     else if (action === 'capcut') openCapCutImportDialog();
     else if (action === 'ai-bridge') void openAiBridgeDialog();
     else if (action === 'library') openUnavailable('Biblioteca', 'Abre un proyecto para ver su biblioteca de medios local. No hay contenido en la nube.');
@@ -596,6 +623,12 @@ export function mountHome(root) {
     if (remove) {
       event.stopPropagation();
       void handleDelete(remove.dataset.projectDelete);
+      return;
+    }
+    const share = event.target.closest('[data-project-export]');
+    if (share) {
+      event.stopPropagation();
+      void handleExportFile(share.dataset.projectExport);
       return;
     }
     const card = event.target.closest('[data-project-id]');
@@ -642,6 +675,18 @@ export function mountHome(root) {
     const base = (files[0].name || 'Proyecto importado').replace(/\.[^.]+$/, '').slice(0, 60);
     await newProject(base || 'Proyecto importado');
     await importFiles(files);
+  });
+
+  projectFileInput.addEventListener('change', async () => {
+    const file = projectFileInput.files?.[0];
+    projectFileInput.value = '';
+    if (!file) return;
+    try {
+      const result = await importProjectFile(file);
+      toast(`Proyecto “${result.name}” abierto desde el archivo`, 'success', 3600);
+    } catch (error) {
+      toast(error?.message || 'No se pudo abrir el archivo de proyecto', 'error', 4200);
+    }
   });
 
   subscriptions.push(on('projects', renderProjects));

@@ -238,6 +238,7 @@ export class MediaPool {
     this.videos = new Map();
     this.audios = new Map();
     this.images = new Map();
+    this.frames = new Map();
     this.audioContext = null;
     this.audioDest = null;
     this.muted = false;
@@ -273,6 +274,30 @@ export class MediaPool {
     video.addEventListener('seeked', () => this.onReady?.());
     this.videos.set(clip.id, video);
     return video;
+  }
+
+  /* Guarda el último frame bueno de cada vídeo para que la vista previa
+     no se ponga en negro mientras el navegador resuelve un seek. */
+  captureFrame(clipId, video) {
+    try {
+      if (!video.videoWidth || !video.videoHeight) return;
+      let snap = this.frames.get(clipId);
+      if (!snap) {
+        snap = document.createElement('canvas');
+        this.frames.set(clipId, snap);
+      }
+      if (snap.width !== video.videoWidth || snap.height !== video.videoHeight) {
+        snap.width = video.videoWidth;
+        snap.height = video.videoHeight;
+      }
+      snap.getContext('2d').drawImage(video, 0, 0);
+    } catch {
+      /* frame aún no dibujable */
+    }
+  }
+
+  lastFrame(clipId) {
+    return this.frames.get(clipId) || null;
   }
 
   audio(clip) {
@@ -392,6 +417,7 @@ export class MediaPool {
     this.videos.clear();
     this.audios.clear();
     this.images.clear();
+    this.frames.clear();
     this.onReady = null;
   }
 }
@@ -1391,7 +1417,20 @@ function drawEffectOverlay(ctx, clip, local, width, height, alpha) {
 function drawMediaSource(ctx, clip, media, width, height, pool) {
   if (media.kind === 'video') {
     const video = pool.video(clip);
-    if (video && video.readyState >= 2 && video.videoWidth) {
+    const ready = Boolean(video && video.readyState >= 2 && video.videoWidth);
+    // Mientras el navegador resuelve un seek el elemento puede devolver un
+    // fotograma en negro: se dibuja la última imagen buena guardada.
+    if (ready && !video.seeking) {
+      pool.captureFrame(clip.id, video);
+      drawContain(ctx, video, video.videoWidth, video.videoHeight, width, height);
+      return true;
+    }
+    const snapshot = pool.lastFrame(clip.id);
+    if (snapshot && snapshot.width) {
+      drawContain(ctx, snapshot, snapshot.width, snapshot.height, width, height);
+      return true;
+    }
+    if (ready) {
       drawContain(ctx, video, video.videoWidth, video.videoHeight, width, height);
       return true;
     }
@@ -1725,6 +1764,20 @@ function textAnimationState(text, local, duration) {
   return state;
 }
 
+/* Desfase de previsualización para las animaciones mientras el reproductor
+   está pausado: los bucles avanzan y las entradas/salidas se repiten. */
+function pausedAnimOffset(text, clock) {
+  const spec = textAnimationById(text?.animation);
+  if (!spec) return 0;
+  const phase = text.animationPhase || spec.phase || 'in';
+  if (phase === 'loop') return clock;
+  const duration = Math.max(0.1, textNumber(text.animationDuration, spec.duration || 0.6));
+  // Entrada: se reproduce una vez y deja el texto visible.
+  if (phase === 'in') return Math.min(duration * 0.1 + clock, duration);
+  // Salida: se repite para poder verla estando en pausa.
+  return clock % (duration + 0.8);
+}
+
 function paintTextGlyph(ctx, run, x, y, text, metrics) {
   const strokeWidth = Math.max(0, textNumber(text.strokeWidth, 0)) *
     metrics.fontSize *
@@ -1834,7 +1887,8 @@ function drawTextLayer(ctx, layer, width, height, options = {}) {
   const time = (clip.start || 0) + local;
   const tr = transformAt(clip, time);
   const anim = options.ignoreTransition ? null : transitionState(clip, local);
-  const textAnim = textAnimationState(text, local, clip.duration || 1);
+  const animClock = Number.isFinite(options.animClock) ? options.animClock : 0;
+  const textAnim = textAnimationState(text, animClock ? local + pausedAnimOffset(text, animClock) : local, clip.duration || 1);
   const alpha = (options.ignoreFades ? tr.opacity : clipAlpha(clip, local)) *
     transitionAlpha(anim) *
     keyframeValue(clip, 'text.opacity', time, textNumber(text.opacity, 1)) *
@@ -1962,7 +2016,7 @@ function drawVisualLayer(ctx, layer, width, height, pool, options = {}) {
   }
 }
 
-export function renderFrame(ctx, width, height, project, pool, time, { background = '#000000' } = {}) {
+export function renderFrame(ctx, width, height, project, pool, time, { background = '#000000', animClock = 0 } = {}) {
   ctx.save();
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = background;
@@ -2000,7 +2054,7 @@ export function renderFrame(ctx, width, height, project, pool, time, { backgroun
         drawVisualLayer(ctx, { clip: under, track: layer.track, local: Math.max(0, previous.duration - 0.001) }, width, height, pool, { ignoreFades: true, ignoreTransition: true });
       }
     }
-    drawVisualLayer(ctx, layer, width, height, pool);
+    drawVisualLayer(ctx, layer, width, height, pool, animClock ? { animClock } : {});
     visual += 1;
   }
 

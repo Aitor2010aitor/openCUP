@@ -42,6 +42,11 @@ import { openExportDialog } from './export.js';
 import { openShortcutsDialog } from './dialogs.js';
 import { TEMPLATES } from './templates.js';
 import {
+  isKokoroSpanishVoice,
+  loadKokoro,
+  generateKokoroAudio,
+} from './kokoro-tts.js';
+import {
   STICKERS,
   STICKER_CATEGORIES,
   EFFECTS,
@@ -622,6 +627,20 @@ export function mountLeftPanel(host) {
       ? { animation: item.id, animationPhase: item.phase, animationDuration: item.duration }
       : { animation: 'none' };
     applyTextPatch(patch, item ? `Animación “${item.label}” aplicada` : 'Animación eliminada');
+    if (!item) return;
+    // Coloca el cursor donde la animación es visible: su inicio (entrada),
+    // justo antes del final (salida) o en pleno bucle.
+    const found = selectedClip();
+    const clip = found?.clip?.kind === 'text' ? found.clip : null;
+    if (!clip) return;
+    const duration = Math.max(0.1, item.duration || 0.6);
+    let target = clip.start;
+    if (item.phase === 'out') {
+      target = clip.start + Math.max(0, clip.duration - Math.min(duration, clip.duration));
+    } else if (item.phase === 'loop') {
+      target = clip.start + Math.min(0.35, Math.max(0.05, clip.duration / 2));
+    }
+    seek(target);
   }
 
   function speakTts() {
@@ -652,6 +671,72 @@ export function mountLeftPanel(host) {
     };
     speech.speak(utterance);
     toast('Reproduciendo vista previa de voz', 'info', 1300);
+  }
+
+  /* ------------------------- Kokoro TTS (IA local) ------------------------- */
+  let kokoroBusy = false;
+
+  function setKokoroProgress(label, value) {
+    const wrap = body.querySelector('[data-tts-progress]');
+    if (!wrap) return;
+    if (!label) {
+      wrap.classList.add('hidden');
+      wrap.classList.remove('indeterminate');
+      return;
+    }
+    wrap.classList.remove('hidden');
+    const text = wrap.querySelector('[data-tts-progress-label]');
+    const bar = wrap.querySelector('[data-tts-progress-bar]');
+    if (text) text.textContent = label;
+    if (bar && Number.isFinite(value)) {
+      bar.style.width = `${Math.max(0, Math.min(100, value))}%`;
+      wrap.classList.remove('indeterminate');
+    } else if (bar) {
+      wrap.classList.add('indeterminate');
+    }
+  }
+
+  function kokoroButtonState(busy) {
+    const button = body.querySelector('[data-tts-generate]');
+    if (!button) return;
+    button.disabled = busy;
+    button.innerHTML = busy
+      ? `${icon('rotate', 13)} Generando…`
+      : `${icon('sparkles', 13)} Generar voz e importar a la línea de tiempo`;
+  }
+
+  async function generateKokoro() {
+    if (kokoroBusy) return;
+    const area = body.querySelector('[data-tts-text]');
+    const text = (area?.value || activeTextClip()?.text?.content || '').trim();
+    if (!text) {
+      toast('Escribe el texto que quieres convertir en voz', 'warning');
+      return;
+    }
+    const voice = body.querySelector('[data-kokoro-voice]')?.value || 'ef_dora';
+    kokoroBusy = true;
+    kokoroButtonState(true);
+    try {
+      const result = await generateKokoroAudio({
+        text,
+        voice,
+        speed: ttsRate,
+        onProgress: (label, value) => setKokoroProgress(label, value),
+      });
+      setKokoroProgress('Importando el audio al proyecto…', 100);
+      const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '-');
+      const file = new File([result.blob], `Kokoro ${voice} ${stamp}.wav`, { type: 'audio/wav' });
+      await importFiles([file], { silent: true });
+      toast(`Voz generada (${result.seconds.toFixed(1)} s) e importada a la línea de tiempo`, 'success', 4200);
+    } catch (error) {
+      console.error('Kokoro TTS', error);
+      const message = error?.message || 'no se pudo generar la voz';
+      toast(`Kokoro: ${message}`, 'error', 5400);
+    } finally {
+      kokoroBusy = false;
+      setKokoroProgress(null);
+      kokoroButtonState(false);
+    }
   }
 
   function textStyleSample(style) {
@@ -817,8 +902,25 @@ export function mountLeftPanel(host) {
         </div>
         <button class="btn btn-ghost btn-block" data-tts-use-text>${icon('text', 13)} Usar el texto seleccionado</button>
       </div>
-      <div class="text-info-card">${icon('mic', 14)} <strong>Voces locales</strong><p>Se usan las voces de Windows mediante <code>speechSynthesis</code>. Si no aparece ninguna voz en la lista, instala un paquete de voz en Configuración → Hora e idioma → Voz.</p></div>
-      <div class="text-info-card muted-card">La generación de voz con IA y la clonación de voz necesitan conexión. No están disponibles en openCUP sin conexión.</div>`;
+      <div class="text-kokoro-form">
+        <div class="text-panel-section-head"><span>Voz neuronal Kokoro</span><b>IA local</b></div>
+        <div class="field">
+          <label>Voz</label>
+          <select class="input" data-kokoro-voice>
+            <option value="ef_dora">Dora · español (femenina)</option>
+            <option value="em_alex">Alex · español (masculina)</option>
+            <option value="em_santa">Santa · español (masculina)</option>
+            <option value="af_heart">Heart · inglés (femenina)</option>
+          </select>
+        </div>
+        <div class="tts-progress hidden" data-tts-progress>
+          <div class="tts-progress-track"><div class="tts-progress-bar" data-tts-progress-bar></div></div>
+          <span class="tts-progress-label" data-tts-progress-label>Preparando…</span>
+        </div>
+        <button class="btn btn-primary btn-block" data-tts-generate>${icon('sparkles', 13)} Generar voz e importar a la línea de tiempo</button>
+        <div class="text-panel-hint" style="margin-top:6px">La primera vez descarga el modelo (~92 MB); después se usa la caché del navegador y funciona sin conexión.</div>
+      </div>
+      <div class="text-info-card">${icon('mic', 14)} <strong>Voces locales</strong><p>Se usan las voces de Windows mediante <code>speechSynthesis</code>. Si no aparece ninguna voz en la lista, instala un paquete de voz en Configuración → Hora e idioma → Voz.</p></div>`;
   }
 
   function textPanel() {
@@ -1712,6 +1814,10 @@ export function mountLeftPanel(host) {
 
     if (event.target.closest('[data-tts-play]')) {
       speakTts();
+      return;
+    }
+    if (event.target.closest('[data-tts-generate]')) {
+      void generateKokoro();
       return;
     }
     if (event.target.closest('[data-tts-stop]')) {
